@@ -1,8 +1,7 @@
 ﻿.venv/
 __pycache__/
+dist/*.exe
+dist/*.zip
+build/
 *.pyc
-.venv
-BladoCommon/config.ini
-config.ini
-uploads/
-photos/cache/
+BladoCommon/bladocommon/config.ini

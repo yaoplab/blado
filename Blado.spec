@@ -1,19 +1,28 @@
 # -*- mode: python ; coding: utf-8 -*-
-
+from PyInstaller.utils.hooks import collect_dynamic_libs, collect_submodules
 
 a = Analysis(
     ['Blado/__main__.py'],
-    pathex=[],
+    pathex=['D:/Blado'],
     binaries=[],
-    datas=[('BladoCommon', 'BladoCommon'), ('phibuilder', 'phibuilder'), ('photos', 'photos'), ('sql', 'sql')],
-    hiddenimports=['configparser'],
+    datas=[
+        ('BladoCommon', 'BladoCommon'),
+        ('phibuilder', 'phibuilder'),
+        ('photos', 'photos'),
+        ('sql', 'sql'),
+    ],
+    hiddenimports=[
+        'configparser', 'PySide6.QtSvg', 'PySide6.QtNetwork', 'PySide6.QtPrintSupport',
+        'lxml', 'lxml.etree', 'docx', 'materialyoucolor', 'PIL', 'PIL.Image',
+    ] + collect_submodules('psycopg2'),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[],
     noarchive=False,
-    optimize=0,
 )
+a.binaries += collect_dynamic_libs('psycopg2')
+
 pyz = PYZ(a.pure)
 
 exe = EXE(
@@ -24,15 +33,6 @@ exe = EXE(
     [],
     name='Blado',
     debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
 )
