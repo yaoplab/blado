@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "blado"
+version = "1.0.0"
+description = "Blado — Logiciel RH autonome pour entreprises et consultants"
+requires-python = ">=3.10"
+dependencies = [
+    "PySide6>=6.5",
+    "psycopg2-binary>=2.9",
+    "materialyoucolor>=3.0",
+    "python-docx>=1.0",
+]
