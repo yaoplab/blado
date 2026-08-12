@@ -111,8 +111,8 @@ class MainWindow(QWidget):
         # Logo
         import os
         logo_paths = [
+            os.path.join(os.path.dirname(__file__), "..", "..", "photos", "LogoBlado.png"),
             os.path.join(os.path.dirname(__file__), "..", "..", "photos", "logo.png"),
-            os.path.join(os.path.dirname(__file__), "..", "..", "assets", "logo.png"),
         ]
         logo_lbl = QLabel()
         logo_lbl.setAlignment(Qt.AlignCenter)
@@ -435,7 +435,7 @@ class MainWindow(QWidget):
         layout.setSpacing(ds.space_md)
         layout.setContentsMargins(ds.space_xl, ds.space_xl, ds.space_xl, ds.space_xl)
 
-        logo_path = os.path.join(os.path.dirname(__file__), "..", "..", "photos", "logo.png")
+        logo_path = os.path.join(os.path.dirname(__file__), "..", "..", "photos", "LogoBlado.png")
         logo_lbl = QLabel()
         logo_lbl.setAlignment(Qt.AlignCenter)
         if os.path.exists(logo_path):
