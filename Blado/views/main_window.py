@@ -111,7 +111,6 @@ class MainWindow(QWidget):
         # Logo
         import os
         logo_paths = [
-            os.path.join(os.path.dirname(__file__), "..", "..", "photos", "LogoBlado.png"),
             os.path.join(os.path.dirname(__file__), "..", "..", "photos", "logo.png"),
         ]
         logo_lbl = QLabel()
