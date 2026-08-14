@@ -1,7 +1,28 @@
-﻿.venv/
+.venv/
 __pycache__/
-dist/*.exe
-dist/*.zip
 build/
 *.pyc
+
+# Secrets / configuration locale (jamais commités)
+config.ini
+BladoCommon/config.ini
 BladoCommon/bladocommon/config.ini
+
+# Logs
+*.log
+
+# Données RH sensibles
+Blado/photos/
+uploads/
+backups/
+
+# Builds et installateurs
+dist/
+installer/
+*.exe
+*.zip
+*.spec.bak
+
+# Artefacts
+.coverage
+grid_snap.*
