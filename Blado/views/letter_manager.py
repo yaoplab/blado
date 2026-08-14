@@ -26,19 +26,10 @@ from phibuilder.phi.scale import SpacingToken
 from Blado.common.blado_database import BladoDatabase
 from Blado.views.letter_templates import build as build_letter
 from Blado.views.letter_templates import generate_docx, render_body, PLACEHOLDER_STAFF
-
-FAMILIES = [
-    ("A", "Contrat et emploi"),
-    ("B", "Rémunération"),
-    ("C", "Discipline"),
-    ("D", "Congés (RH)"),
-    ("E", "Fin de contrat"),
-    ("F", "Vie professionnelle"),
-    ("G", "Recrutement"),
-    ("H", "Demandes employé"),
-    ("I", "Spécifique IB"),
-    ("J", "Syndical"),
-]
+from Blado.views.letter_dialogs import (
+    _CatalogDialog, _EditTemplateDialog, _GenerateLetterDialog, _StaffSearchPopup,
+    FAMILIES,
+)
 
 COMPANY_PREFIX = "AEC-"
 
@@ -109,7 +100,7 @@ class LetterManager(QWidget):
                 QPushButton {{ text-align: left; padding: {ds.space_xxs}px {ds.space_xs}px;
                 border: none; border-radius: {ds.radius_xs}px; color: {p.text_strong};
                 font-size: {s(12)}px; background: transparent; }}
-                QPushButton:checked {{ background: {p.primary_container}; color: {p.primary}; font-weight: bold; }}
+                QPushButton:checked {{ background: {p.primary_container}; color: {p.text_strong}; font-weight: bold; }}
                 QPushButton:hover {{ background: {p.surface}; }}
             """)
             btn.clicked.connect(lambda checked, k=fam_key: self._switch_family(k))
@@ -168,7 +159,7 @@ class LetterManager(QWidget):
 
         # Compteur
         self._counter_lbl = QLabel("")
-        self._counter_lbl.setStyleSheet(f"font-size: {s(11)}px; color: {p.text_soft}; border: none;")
+        self._counter_lbl.setStyleSheet(f"font-size: {s(12)}px; color: {p.text_soft}; border: none;")
         cl.addWidget(self._counter_lbl)
 
         # Scroll
@@ -199,8 +190,13 @@ class LetterManager(QWidget):
     def _do_staff_search(self):
         q = self._staff_search.text().strip()
         if len(q) < 2: return
-        results = BladoDatabase.search_staff(1001, 5000, is_staff=False, search_text=q)
-        results += BladoDatabase.search_staff(4001, 5000, is_staff=True, search_text=q)
+        # BLADO multi-clients : la recherche d'employés respecte le client actif
+        ent_id = session.entreprise_id if session.mode == "consultant" else None
+        filters = {"entreprise_id": ent_id} if ent_id else None
+        results = BladoDatabase.search_staff(1001, 5000, is_staff=False,
+                                             search_text=q, filters=filters)
+        results += BladoDatabase.search_staff(4001, 5000, is_staff=True,
+                                              search_text=q, filters=filters)
         seen = set(); unique = []
         for r in results:
             if r["id"] not in seen: seen.add(r["id"]); unique.append(r)
@@ -290,7 +286,7 @@ class LetterManager(QWidget):
         r1 = QHBoxLayout()
         r1.setSpacing(ds.space_sm)
         code_lbl = QLabel(code)
-        code_lbl.setFixedWidth(70)
+        code_lbl.setFixedWidth(ds.field_height * 2 + ds.space_xxs)
         code_lbl.setAlignment(Qt.AlignCenter)
         code_lbl.setStyleSheet(f"font-size: {s(10)}px; font-weight: bold; color: white; background: {p.primary}; border-radius: {ds.radius_xs}px; padding: 2px 6px; border: none;")
         r1.addWidget(code_lbl)
@@ -299,14 +295,14 @@ class LetterManager(QWidget):
         r1.addWidget(title_lbl, 1)
 
         badge = QLabel("  AEC  ")
-        badge.setStyleSheet(f"font-size: {s(8)}px; color: {p.primary}; border: 1px solid {p.primary}; border-radius: 3px; padding: 1px 4px; background: {p.primary_container};")
+        badge.setStyleSheet(f"font-size: {s(8)}px; color: {p.text_strong}; border: 1px solid {p.primary}; border-radius: {ds.space_xxs}px; padding: 1px 4px; background: {p.primary_container};")
         r1.addWidget(badge)
         crd.addLayout(r1)
 
         if desc:
             d = QLabel(desc)
             d.setWordWrap(True)
-            d.setStyleSheet(f"font-size: {s(11)}px; color: {p.text_soft}; border: none; padding-left: 82px;")
+            d.setStyleSheet(f"font-size: {s(12)}px; color: {p.text_soft}; border: none; padding-left: {ds.field_height * 2 + ds.space_xxs + ds.space_sm}px;")
             crd.addWidget(d)
 
         # Famille
@@ -314,7 +310,7 @@ class LetterManager(QWidget):
                      "E": "Départ", "F": "Vie pro", "G": "Recrutement", "H": "Demande employé",
                      "I": "IB", "J": "Syndical"}
         fam_lbl = QLabel(fam_names.get(family, ""))
-        fam_lbl.setStyleSheet(f"font-size: {s(10)}px; color: {p.text_soft}; border: none; padding-left: 82px;")
+        fam_lbl.setStyleSheet(f"font-size: {s(10)}px; color: {p.text_soft}; border: none; padding-left: {ds.field_height * 2 + ds.space_xxs + ds.space_sm}px;")
         crd.addWidget(fam_lbl)
 
         # Staff chip
@@ -322,8 +318,8 @@ class LetterManager(QWidget):
         actions.setSpacing(ds.space_xxs)
         if self._selected_staff:
             chip = QLabel(f"  {self._selected_staff.get('full_name', '')[:25]}  ")
-            chip.setStyleSheet(f"font-size: {s(10)}px; color: {p.primary}; background: {p.primary_container}; border-radius: 8px; padding: 2px 6px; border: none;")
-            chip.setFixedHeight(18)
+            chip.setStyleSheet(f"font-size: {s(10)}px; color: {p.text_strong}; background: {p.primary_container}; border-radius: {ds.radius_sm}px; padding: 2px 6px; border: none;")
+            chip.setFixedHeight(ds.space_m3)
             actions.addWidget(chip)
         else:
             actions.addWidget(QLabel("  Pas de destinataire  "))
@@ -336,8 +332,8 @@ class LetterManager(QWidget):
         edit_btn.setStyleSheet(f"""
             QPushButton {{ background: transparent; color: {p.text_soft};
             border: 1px solid {p.outline}; border-radius: {ds.radius_xs}px;
-            padding: 2px {ds.space_xs}px; font-size: {s(11)}px; }}
-            QPushButton:hover {{ background: {p.surface_variant}; color: {p.primary}; }}
+            padding: 2px {ds.space_xs}px; font-size: {s(12)}px; }}
+            QPushButton:hover {{ background: {p.surface_variant}; color: {p.text_strong}; }}
         """)
         edit_btn.clicked.connect(lambda checked, t=tpl: self._on_edit(t))
         actions.addWidget(edit_btn)
@@ -349,7 +345,7 @@ class LetterManager(QWidget):
         del_btn.setStyleSheet(f"""
             QPushButton {{ background: transparent; color: {p.error};
             border: 1px solid {p.error}; border-radius: {ds.radius_xs}px;
-            padding: 2px {ds.space_xs}px; font-size: {s(11)}px; }}
+            padding: 2px {ds.space_xs}px; font-size: {s(12)}px; }}
             QPushButton:hover {{ background: {p.error}; color: white; }}
         """)
         del_btn.clicked.connect(lambda checked, t=tpl: self._on_delete(t))
@@ -377,6 +373,8 @@ class LetterManager(QWidget):
     def _on_new_model(self):
         dlg = _CatalogDialog(self)
         dlg.template_chosen.connect(self._on_template_chosen)
+        # no-popup-feedback : simple sélecteur — le message d'action est émis
+        # par _on_template_chosen au choix du modèle.
         dlg.exec()
 
     @safe_slot("LetterManager._on_template_chosen")
@@ -418,6 +416,7 @@ class LetterManager(QWidget):
                     data.update(payload)
                 BladoDatabase.save_letter_template(data)
                 self._refresh_cards()
+                QMessageBox.information(self, "Blado", "Modèle enregistré.")
 
     @safe_slot("LetterManager._on_delete")
     def _on_delete(self, template: dict):
@@ -436,6 +435,8 @@ class LetterManager(QWidget):
             cid = self._selected_staff.get("fk_service_id")
             if cid: Service = BladoDatabase.get_service_full(cid)
         dlg = _GenerateLetterDialog(template, self._selected_staff, Service=Service, parent=self)
+        # no-popup-feedback : le dialogue de génération affiche son propre
+        # message « Courrier généré » avant de se fermer.
         dlg.exec()
 
     def refresh(self):

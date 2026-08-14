@@ -9,7 +9,7 @@ from bladocommon.database import db
 
 
 from Blado.common.blado_payroll import BladoPayrollMixin
-from Blado.common.blado_hr_mixin import BladoHRMixin
+from Blado.common.blado_hr_mixin import BladoHRMixin, _ent_filter, ENT_FILTER_SQL
 
 class BladoDatabase(BladoPayrollMixin, BladoHRMixin):
 
@@ -55,12 +55,14 @@ class BladoDatabase(BladoPayrollMixin, BladoHRMixin):
             a.id, a.first_name, a.last_name, a.email,
             a.emp_status, a.fk_service_id,
             a.professional_category, a.matricule,
-            c.label AS service_label, COALESCE(c.color, '#1565C0') AS service_color
+            c.label AS service_label, COALESCE(c.color, '#1565C0') AS service_color,
+            COALESCE(ent.nom, '') AS entreprise_nom
         """
         query = f"""
             SELECT {base_cols}
             FROM blado_employee a
             LEFT JOIN services c ON a.fk_service_id = c.id
+            LEFT JOIN entreprises ent ON ent.id = a.fk_entreprise_id
             WHERE a.is_active = TRUE
         """
 
@@ -82,6 +84,11 @@ class BladoDatabase(BladoPayrollMixin, BladoHRMixin):
             if filters.get("status"):
                 query += " AND a.emp_status = %s"
                 params.append(filters["status"])
+            if filters.get("entreprise_id"):
+                # Employé rattaché directement au client, ou via son service
+                query += (" AND (a.fk_entreprise_id = %s OR "
+                          "(a.fk_entreprise_id IS NULL AND c.entreprise_id = %s))")
+                params.extend([filters["entreprise_id"], filters["entreprise_id"]])
 
         sort = (filters or {}).get("sort", "name")
         if sort == "name":
@@ -183,12 +190,13 @@ class BladoDatabase(BladoPayrollMixin, BladoHRMixin):
         if not conn:
             return []
         cur = conn.cursor()
+        # Schéma : blado_degree.title (pas degree_type, pas de colonne country)
         cur.execute(
-            "SELECT id, degree_type, institution, year_obtained, country, field_of_study "
+            "SELECT id, title, institution, year_obtained, field_of_study "
             "FROM blado_degree WHERE staff_id = %s ORDER BY year_obtained DESC",
             (staff_id,))
         return [{"id": r[0], "degree_type": r[1], "institution": r[2],
-                 "year_obtained": r[3], "country": r[4], "field_of_study": r[5]}
+                 "year_obtained": r[3], "field_of_study": r[4]}
                 for r in cur.fetchall()]
 
     @staticmethod
@@ -200,16 +208,16 @@ class BladoDatabase(BladoPayrollMixin, BladoHRMixin):
         try:
             if data.get("id"):
                 cur.execute("""
-                    UPDATE blado_degree SET degree_type=%s, institution=%s, year_obtained=%s,
-                    country=%s, field_of_study=%s WHERE id=%s AND staff_id=%s
+                    UPDATE blado_degree SET title=%s, institution=%s, year_obtained=%s,
+                    field_of_study=%s WHERE id=%s AND staff_id=%s
                 """, (data["degree_type"], data.get("institution"), data.get("year_obtained"),
-                      data.get("country"), data.get("field_of_study"), data["id"], staff_id))
+                      data.get("field_of_study"), data["id"], staff_id))
             else:
                 cur.execute("""
-                    INSERT INTO blado_degree (staff_id, degree_type, institution, year_obtained, country, field_of_study)
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                    INSERT INTO blado_degree (staff_id, title, institution, year_obtained, field_of_study)
+                    VALUES (%s, %s, %s, %s, %s)
                 """, (staff_id, data["degree_type"], data.get("institution"),
-                      data.get("year_obtained"), data.get("country"), data.get("field_of_study")))
+                      data.get("year_obtained"), data.get("field_of_study")))
             return True
         except Exception:
             import traceback
@@ -235,8 +243,9 @@ class BladoDatabase(BladoPayrollMixin, BladoHRMixin):
         if not conn:
             return []
         cur = conn.cursor()
+        # Schéma : blado_language.niveau (pas proficiency)
         cur.execute(
-            "SELECT id, language, proficiency FROM blado_language WHERE staff_id = %s ORDER BY language",
+            "SELECT id, language, niveau AS proficiency FROM blado_language WHERE staff_id = %s ORDER BY language",
             (staff_id,))
         return [{"id": r[0], "language": r[1], "proficiency": r[2]} for r in cur.fetchall()]
 
@@ -247,11 +256,15 @@ class BladoDatabase(BladoPayrollMixin, BladoHRMixin):
             return False
         cur = conn.cursor()
         try:
-            cur.execute("""
-                INSERT INTO blado_language (staff_id, language, proficiency)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (staff_id, language) DO UPDATE SET proficiency = %s
-            """, (staff_id, data["language"], data.get("proficiency", "B1"), data.get("proficiency", "B1")))
+            # Upsert manuel : pas de contrainte UNIQUE sur (staff_id, language)
+            prof = data.get("proficiency", "B1")
+            cur.execute(
+                "UPDATE blado_language SET niveau = %s WHERE staff_id = %s AND language = %s",
+                (prof, staff_id, data["language"]))
+            if cur.rowcount == 0:
+                cur.execute(
+                    "INSERT INTO blado_language (staff_id, language, niveau) VALUES (%s, %s, %s)",
+                    (staff_id, data["language"], prof))
             return True
         except Exception:
             import traceback
@@ -475,7 +488,7 @@ class BladoDatabase(BladoPayrollMixin, BladoHRMixin):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def get_dashboard_kpis() -> dict[str, Any]:
+    def get_dashboard_kpis(entreprise_id: int | None = None) -> dict[str, Any]:
         conn = db.server_conn
         if not conn:
             return {}
@@ -490,27 +503,45 @@ class BladoDatabase(BladoPayrollMixin, BladoHRMixin):
                 traceback.print_exc()
                 return -1
 
-        total_active = _safe_count("total_active", """
+        # BLADO multi-clients : filtre client optionnel (a/s = employé/service)
+        ent_where = f" AND {ENT_FILTER_SQL}" if entreprise_id else ""
+        ent_params = (entreprise_id, entreprise_id) if entreprise_id else ()
+
+        total_active = _safe_count("total_active", f"""
             SELECT COUNT(*) FROM (
                 SELECT a.id FROM blado_employee a
-                WHERE a.is_active = TRUE AND a.is_active = TRUE
+                LEFT JOIN services s ON s.id = a.fk_service_id
+                WHERE a.is_active = TRUE
                   AND a.emp_status = 'actif' AND a.departure_date IS NULL
-                UNION
-                SELECT a.id FROM blado_employee a
-                WHERE a.is_active = TRUE AND a.is_active = TRUE
-                  AND a.emp_status = 'actif' AND a.departure_date IS NULL
+                  {ent_where}
             ) AS staff
-        """)
-        active_contracts = _safe_count("active_contracts",
-            "SELECT COUNT(*) FROM blado_contract WHERE statut = 'actif'")
-        pending_leave = _safe_count("pending_leave",
-            "SELECT COUNT(*) FROM blado_leave_request WHERE status = 'en_attente'")
-        expiring = _safe_count("expiring_contracts",
-            "SELECT COUNT(*) FROM blado_contract WHERE statut = 'actif'"
-            " AND date_fin IS NOT NULL AND date_fin <= CURRENT_DATE + INTERVAL '30 days'")
-        absent_today = _safe_count("absent_today",
-            "SELECT COUNT(*) FROM blado_leave_request WHERE status = 'valide'"
-            " AND CURRENT_DATE BETWEEN date_debut AND date_fin")
+        """, ent_params)
+        active_contracts = _safe_count("active_contracts", f"""
+            SELECT COUNT(*) FROM blado_contract c
+            JOIN blado_employee a ON a.id = c.staff_id
+            LEFT JOIN services s ON s.id = a.fk_service_id
+            WHERE c.statut = 'actif' {ent_where}
+        """, ent_params)
+        pending_leave = _safe_count("pending_leave", f"""
+            SELECT COUNT(*) FROM blado_leave_request l
+            JOIN blado_employee a ON a.id = l.staff_id
+            LEFT JOIN services s ON s.id = a.fk_service_id
+            WHERE l.status = 'en_attente' {ent_where}
+        """, ent_params)
+        expiring = _safe_count("expiring_contracts", f"""
+            SELECT COUNT(*) FROM blado_contract c
+            JOIN blado_employee a ON a.id = c.staff_id
+            LEFT JOIN services s ON s.id = a.fk_service_id
+            WHERE c.statut = 'actif' {ent_where}
+              AND c.date_fin IS NOT NULL AND c.date_fin <= CURRENT_DATE + INTERVAL '30 days'
+        """, ent_params)
+        absent_today = _safe_count("absent_today", f"""
+            SELECT COUNT(*) FROM blado_leave_request l
+            JOIN blado_employee a ON a.id = l.staff_id
+            LEFT JOIN services s ON s.id = a.fk_service_id
+            WHERE l.status = 'valide' {ent_where}
+              AND CURRENT_DATE BETWEEN l.date_debut AND l.date_fin
+        """, ent_params)
         return {
             "total_active": total_active,
             "active_contracts": active_contracts,
@@ -520,22 +551,30 @@ class BladoDatabase(BladoPayrollMixin, BladoHRMixin):
         }
 
     @staticmethod
-    def get_headcount_by_service() -> list[dict[str, Any]]:
-        """Effectif actif par service (label, color, count)."""
+    def get_headcount_by_service(entreprise_id: int | None = None) -> list[dict[str, Any]]:
+        """Effectif actif par service (label, color, count) — filtré par client."""
         conn = db.server_conn
         if not conn:
             return []
         cur = conn.cursor()
         try:
-            cur.execute("""
-                SELECT c.label, COALESCE(c.color, '#1565C0'), COUNT(DISTINCT a.id)
+            query = """
+                SELECT s.label, COALESCE(s.color, '#1565C0'), COUNT(DISTINCT a.id)
                 FROM blado_employee a
-                JOIN services c ON a.fk_service_id = c.id
+                JOIN services s ON a.fk_service_id = s.id
                 WHERE a.emp_status = 'actif' AND a.departure_date IS NULL
-                  AND (a.is_active = TRUE OR a.is_active = TRUE)
-                GROUP BY c.id, c.label, c.color
+                  AND a.is_active = TRUE
+                  AND s.enabled = TRUE
+            """
+            params: list[Any] = []
+            if entreprise_id:
+                query += f" AND {ENT_FILTER_SQL}"
+                params = [entreprise_id, entreprise_id]
+            query += """
+                GROUP BY s.id, s.label, s.color
                 ORDER BY COUNT(DISTINCT a.id) DESC
-            """)
+            """
+            cur.execute(query, params)
             cols = ["label", "color", "count"]
             return [dict(zip(cols, r)) for r in cur.fetchall()]
         except Exception:
@@ -544,18 +583,26 @@ class BladoDatabase(BladoPayrollMixin, BladoHRMixin):
             return []
 
     @staticmethod
-    def get_contracts_by_type() -> list[dict[str, Any]]:
-        """Contrats actifs groupés par type."""
+    def get_contracts_by_type(entreprise_id: int | None = None) -> list[dict[str, Any]]:
+        """Contrats actifs groupés par type (filtré par client)."""
         conn = db.server_conn
         if not conn:
             return []
         cur = conn.cursor()
         try:
-            cur.execute("""
-                SELECT contract_type, COUNT(*) AS cnt
-                FROM blado_contract WHERE statut = 'actif'
-                GROUP BY contract_type ORDER BY cnt DESC
-            """)
+            query = """
+                SELECT c.contract_type, COUNT(*) AS cnt
+                FROM blado_contract c
+                JOIN blado_employee a ON a.id = c.staff_id
+                LEFT JOIN services s ON s.id = a.fk_service_id
+                WHERE c.statut = 'actif'
+            """
+            params: list[Any] = []
+            if entreprise_id:
+                query += f" AND {ENT_FILTER_SQL}"
+                params = [entreprise_id, entreprise_id]
+            query += " GROUP BY c.contract_type ORDER BY cnt DESC"
+            cur.execute(query, params)
             cols = ["type", "count"]
             return [dict(zip(cols, r)) for r in cur.fetchall()]
         except Exception:
@@ -564,38 +611,48 @@ class BladoDatabase(BladoPayrollMixin, BladoHRMixin):
             return []
 
     @staticmethod
-    def get_absence_rate_30d() -> dict[str, Any]:
+    def get_absence_rate_30d(entreprise_id: int | None = None) -> dict[str, Any]:
         """Taux d'absentéisme sur 30 jours glissants + période précédente (delta)."""
         conn = db.server_conn
         if not conn:
             return {"rate": 0, "delta": 0, "days_with_absence": 0, "total_events": 0}
         cur = conn.cursor()
         try:
+            # BLADO multi-clients : JOIN employé + service pour le filtre client
+            ent_where = f" AND {ENT_FILTER_SQL}" if entreprise_id else ""
+            ent_params = (entreprise_id, entreprise_id) if entreprise_id else ()
+            base_from = """
+                FROM blado_event ev
+                JOIN blado_employee a ON a.id = ev.staff_id
+                LEFT JOIN services s ON s.id = a.fk_service_id
+                WHERE ev.event_type LIKE 'Absence%%'
+            """
             # Jours avec au moins une absence sur les 30 derniers jours
-            cur.execute("""
-                SELECT COUNT(DISTINCT DATE(event_at))
-                FROM blado_event
-                WHERE event_type LIKE 'Absence%%'
-                  AND event_at >= CURRENT_DATE - INTERVAL '30 days'
-                  AND event_at < CURRENT_DATE
-            """)
+            cur.execute(f"""
+                SELECT COUNT(DISTINCT DATE(ev.event_at))
+                {base_from}
+                  AND ev.event_at >= CURRENT_DATE - INTERVAL '30 days'
+                  AND ev.event_at < CURRENT_DATE
+                  {ent_where}
+            """, ent_params)
             days_current = cur.fetchone()[0] or 0
             # Période précédente (30–60 jours)
-            cur.execute("""
-                SELECT COUNT(DISTINCT DATE(event_at))
-                FROM blado_event
-                WHERE event_type LIKE 'Absence%%'
-                  AND event_at >= CURRENT_DATE - INTERVAL '60 days'
-                  AND event_at < CURRENT_DATE - INTERVAL '30 days'
-            """)
+            cur.execute(f"""
+                SELECT COUNT(DISTINCT DATE(ev.event_at))
+                {base_from}
+                  AND ev.event_at >= CURRENT_DATE - INTERVAL '60 days'
+                  AND ev.event_at < CURRENT_DATE - INTERVAL '30 days'
+                  {ent_where}
+            """, ent_params)
             days_previous = cur.fetchone()[0] or 0
             # Total events current period
-            cur.execute("""
-                SELECT COUNT(*) FROM blado_event
-                WHERE event_type LIKE 'Absence%%'
-                  AND event_at >= CURRENT_DATE - INTERVAL '30 days'
-                  AND event_at < CURRENT_DATE
-            """)
+            cur.execute(f"""
+                SELECT COUNT(*)
+                {base_from}
+                  AND ev.event_at >= CURRENT_DATE - INTERVAL '30 days'
+                  AND ev.event_at < CURRENT_DATE
+                  {ent_where}
+            """, ent_params)
             total_events = cur.fetchone()[0] or 0
 
             rate = round(days_current / 30.0 * 100, 1) if days_current > 0 else 0.0
@@ -609,18 +666,26 @@ class BladoDatabase(BladoPayrollMixin, BladoHRMixin):
             return {"rate": 0, "delta": 0, "days_with_absence": 0, "total_events": 0}
 
     @staticmethod
-    def get_overdue_tasks() -> int:
+    def get_overdue_tasks(entreprise_id: int | None = None) -> int:
         """Nombre de tâches en retard (due_date passée, non terminées)."""
         conn = db.server_conn
         if not conn:
             return 0
         cur = conn.cursor()
         try:
-            cur.execute("""
-                SELECT COUNT(*) FROM blado_todo
-                WHERE due_date IS NOT NULL AND due_date < CURRENT_DATE
-                  AND status != 'done'
-            """)
+            # BLADO multi-clients : les tâches rattachées à un employé suivent
+            # le client de celui-ci ; les tâches globales restent visibles
+            ent_exists = (f" AND (t.assigned_to IS NULL OR EXISTS ("
+                          f"SELECT 1 FROM blado_employee a"
+                          f" LEFT JOIN services s ON s.id = a.fk_service_id"
+                          f" WHERE a.id = t.assigned_to AND {ENT_FILTER_SQL}))") if entreprise_id else ""
+            ent_params = (entreprise_id, entreprise_id) if entreprise_id else ()
+            cur.execute(f"""
+                SELECT COUNT(*) FROM blado_todo t
+                WHERE t.due_date IS NOT NULL AND t.due_date < CURRENT_DATE
+                  AND t.status != 'done'
+                  {ent_exists}
+            """, ent_params)
             return cur.fetchone()[0] or 0
         except Exception:
             import traceback
@@ -628,30 +693,37 @@ class BladoDatabase(BladoPayrollMixin, BladoHRMixin):
             return 0
 
     @staticmethod
-    def get_completeness_stats() -> dict[str, Any]:
+    def get_completeness_stats(entreprise_id: int | None = None) -> dict[str, Any]:
         """Score de complétude : employés actifs avec tous les champs P0 remplis."""
         conn = db.server_conn
         if not conn:
             return {"total": 0, "complete": 0, "incomplete": 0, "pct": 0}
         cur = conn.cursor()
         try:
-            cur.execute("""
+            ent_where = f" AND {ENT_FILTER_SQL}" if entreprise_id else ""
+            ent_params = (entreprise_id, entreprise_id) if entreprise_id else ()
+            base_where = f"""
+                a.emp_status = 'actif' AND a.departure_date IS NULL
+                  AND a.is_active = TRUE
+                  {ent_where}
+            """
+            cur.execute(f"""
                 SELECT COUNT(*) FROM blado_employee a
-                WHERE a.emp_status = 'actif' AND a.departure_date IS NULL
-                  AND (a.is_active = TRUE OR a.is_active = TRUE)
-            """)
+                LEFT JOIN services s ON s.id = a.fk_service_id
+                WHERE {base_where}
+            """, ent_params)
             total = cur.fetchone()[0] or 0
-            cur.execute("""
+            cur.execute(f"""
                 SELECT COUNT(*) FROM blado_employee a
-                WHERE a.emp_status = 'actif' AND a.departure_date IS NULL
-                  AND (a.is_active = TRUE OR a.is_active = TRUE)
+                LEFT JOIN services s ON s.id = a.fk_service_id
+                WHERE {base_where}
                   AND a.cnss_number IS NOT NULL AND a.cnss_number != ''
                   AND a.matricule IS NOT NULL AND a.matricule != ''
                   AND a.emergency_contact_name IS NOT NULL AND a.emergency_contact_name != ''
                   AND a.emergency_contact_phone IS NOT NULL AND a.emergency_contact_phone != ''
                   AND a.id_document_number IS NOT NULL AND a.id_document_number != ''
                   AND EXISTS (SELECT 1 FROM blado_contract c WHERE c.staff_id = a.id AND c.statut = 'actif')
-            """)
+            """, ent_params)
             complete = cur.fetchone()[0] or 0
             incomplete = total - complete
             pct = round(complete / total * 100) if total > 0 else 0
@@ -661,20 +733,125 @@ class BladoDatabase(BladoPayrollMixin, BladoHRMixin):
             traceback.print_exc()
             return {"total": 0, "complete": 0, "incomplete": 0, "pct": 0}
 
+    # ------------------------------------------------------------------
+    # Vérification du dossier (« Vérifié et Validé »)
+    # ------------------------------------------------------------------
+
+    # Données indispensables à vérifier/valider dans la fiche employé
+    # (validation 100 % manuelle : le RH coche même si l'info n'existe pas)
+    DOSSIER_CHECK_ITEMS: list[tuple[str, str]] = [
+        ("matricule", "Matricule"),
+        ("cnss", "N° CNSS"),
+        ("piece_identite", "Pièce d'identité"),
+        ("urgence_nom", "Contact urgence (nom)"),
+        ("urgence_tel", "Contact urgence (tél)"),
+    ]
+
     @staticmethod
-    def get_expiring_id_docs() -> int:
+    def get_dossier_checks(staff_id: int) -> dict[str, dict]:
+        conn = db.server_conn
+        if not conn:
+            return {}
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "SELECT item_key, validated, validated_by, validated_at "
+                "FROM blado_dossier_check WHERE staff_id = %s",
+                (staff_id,))
+            out = {}
+            for key, val, by, at in cur.fetchall():
+                out[key] = {"validated": val, "validated_by": by, "validated_at": at}
+            return out
+        except Exception:
+            return {}
+
+    @staticmethod
+    def set_dossier_check(staff_id: int, item_key: str, validated: bool,
+                          validated_by: str = "") -> bool:
+        conn = db.server_conn
+        if not conn:
+            return False
+        cur = conn.cursor()
+        try:
+            cur.execute("""
+                INSERT INTO blado_dossier_check (staff_id, item_key, validated, validated_by, validated_at)
+                VALUES (%s, %s, %s, %s, NOW())
+                ON CONFLICT (staff_id, item_key)
+                DO UPDATE SET validated = %s, validated_by = %s, validated_at = NOW()
+            """, (staff_id, item_key, validated, validated_by or None,
+                  validated, validated_by or None))
+            return True
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            return False
+
+    @staticmethod
+    def dossier_validation_progress(staff_id: int) -> dict:
+        checks = BladoDatabase.get_dossier_checks(staff_id)
+        total = len(BladoDatabase.DOSSIER_CHECK_ITEMS)
+        done = sum(1 for k, _ in BladoDatabase.DOSSIER_CHECK_ITEMS
+                   if checks.get(k, {}).get("validated"))
+        return {"validated": done, "total": total,
+                "pct": round(done / total * 100) if total else 0}
+
+    @staticmethod
+    def get_pending_validations(entreprise_id: int | None = None) -> list[dict]:
+        """Dossiers actifs avec des items non « Vérifiés et Validés » — et lesquels."""
+        conn = db.server_conn
+        if not conn:
+            return []
+        cur = conn.cursor()
+        try:
+            ent_filter = _ent_filter(emp="e")
+            query = """
+                SELECT e.id, e.first_name || ' ' || e.last_name AS full_name,
+                       ARRAY_AGG(dc.item_key ORDER BY dc.item_key)
+                           FILTER (WHERE dc.validated = TRUE) AS ok_items
+                FROM blado_employee e
+                LEFT JOIN services s ON s.id = e.fk_service_id
+                LEFT JOIN blado_dossier_check dc ON dc.staff_id = e.id AND dc.validated = TRUE
+                WHERE e.is_active = TRUE AND e.emp_status = 'actif' AND e.departure_date IS NULL
+            """
+            params: list[Any] = []
+            if entreprise_id:
+                query += f" AND {ent_filter}"
+                params = [entreprise_id, entreprise_id]
+            query += " GROUP BY e.id, e.first_name, e.last_name ORDER BY e.last_name, e.first_name"
+            cur.execute(query, params)
+            labels = dict(BladoDatabase.DOSSIER_CHECK_ITEMS)
+            out = []
+            for sid, name, ok_items in cur.fetchall():
+                ok = set(ok_items or [])
+                pending = [labels[k] for k, _ in BladoDatabase.DOSSIER_CHECK_ITEMS if k not in ok]
+                if pending:
+                    out.append({"id": sid, "full_name": name, "pending": pending})
+            return out
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            return []
+
+    @staticmethod
+    def get_expiring_id_docs(entreprise_id: int | None = None) -> int:
         """Pièces d'identité expirées ou expirant dans les 30 jours."""
         conn = db.server_conn
         if not conn:
             return 0
         cur = conn.cursor()
         try:
-            cur.execute("""
-                SELECT COUNT(*) FROM blado_employee
-                WHERE emp_status = 'actif' AND departure_date IS NULL
-                  AND id_document_expiry IS NOT NULL
-                  AND id_document_expiry <= CURRENT_DATE + INTERVAL '30 days'
-            """)
+            query = """
+                SELECT COUNT(*) FROM blado_employee a
+                LEFT JOIN services s ON s.id = a.fk_service_id
+                WHERE a.emp_status = 'actif' AND a.departure_date IS NULL
+                  AND a.id_document_expiry IS NOT NULL
+                  AND a.id_document_expiry <= CURRENT_DATE + INTERVAL '30 days'
+            """
+            params: list[Any] = []
+            if entreprise_id:
+                query += f" AND {ENT_FILTER_SQL}"
+                params = [entreprise_id, entreprise_id]
+            cur.execute(query, params)
             return cur.fetchone()[0] or 0
         except Exception:
             import traceback

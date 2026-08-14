@@ -19,7 +19,26 @@ from bladocommon.l10n import _
 from bladocommon.safe_slot import set_debug
 
 
+def _install_excepthook():
+    """Toute exception non attrapée (init widgets, handlers hors safe_slot)
+    est écrite dans superviseur.log avec sa traceback complète — plus aucune
+    erreur perdue dans la console invisible."""
+    import traceback as _tb
+    from bladocommon.logger import log as _log
+
+    def _hook(exc_type, exc_value, exc_tb):
+        try:
+            _log(f"[UNCAUGHT] {exc_type.__name__}: {exc_value}\n"
+                 + "".join(_tb.format_exception(exc_type, exc_value, exc_tb)).rstrip())
+        except Exception:
+            pass
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+    sys.excepthook = _hook
+
+
 def main() -> None:
+    _install_excepthook()
     set_debug(True)
     app = QApplication(sys.argv)
     app.setApplicationName("Blado")

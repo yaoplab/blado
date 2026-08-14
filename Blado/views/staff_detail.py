@@ -12,11 +12,13 @@ from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QScrollArea, QFrame, QStackedWidget, QLineEdit,
+    QCheckBox,
 )
 
 from bladocommon.database import db
 from bladocommon.design_system import ds
 from bladocommon.icons import icon as md3_icon
+from bladocommon.session import session
 from bladocommon.theme import theme_manager
 from bladocommon.safe_slot import safe_slot
 from bladocommon.widgets.themed_widget import ThemedDialog
@@ -107,7 +109,7 @@ class CategoryManageDialog(ThemedDialog):
         # ── Existing categories ──
         lbl = QLabel("Catégories existantes")
         lbl.setStyleSheet(
-            f"font-size: {s(11)}px; color: {p.text_soft}; font-weight: bold; border: none;")
+            f"font-size: {s(12)}px; color: {p.text_soft}; font-weight: bold; border: none;")
         layout.addWidget(lbl)
 
         scroll = QScrollArea()
@@ -146,7 +148,7 @@ class CategoryManageDialog(ThemedDialog):
         ]):
             lbl_w = QLabel(l)
             lbl_w.setStyleSheet(
-                f"font-size: {s(11)}px; color: {p.text_soft}; font-weight: bold; border: none;")
+                f"font-size: {s(12)}px; color: {p.text_soft}; font-weight: bold; border: none;")
             grid.addWidget(lbl_w, 0, col)
 
         self._add_key = QLineEdit()
@@ -183,7 +185,7 @@ class CategoryManageDialog(ThemedDialog):
 
         self._add_error = QLabel("")
         self._add_error.setStyleSheet(
-            f"font-size: {s(11)}px; color: {p.error}; border: none;")
+            f"font-size: {s(12)}px; color: {p.error}; border: none;")
         self._add_error.hide()
         layout.addWidget(self._add_error)
 
@@ -291,10 +293,17 @@ class StaffDetail(QWidget, StaffDetailLoaderMixin):
         self._full: dict | None = None
         self._value_labels: dict[str, QLabel] = {}
         self._cat_buttons: dict[str, _CategoryButton] = {}
+        self._check_boxes: dict[str, QCheckBox] = {}
+        self._check_details: dict[str, QLabel] = {}
+        self._loading_checks = False
 
         ds.theme_changed.connect(self._restyle)
         self._setup_ui()
         self._load_full()
+        # Carte « Vérifié et Validé » en haut de l'onglet Identité
+        if hasattr(self, "_personal_layout"):
+            self._personal_layout.insertWidget(0, self._build_verification_card())
+            self._refresh_verification_checks()
 
     # ── QSS ──
 
@@ -385,6 +394,96 @@ class StaffDetail(QWidget, StaffDetailLoaderMixin):
         content.addWidget(self._workspace, 1)
         layout.addLayout(content, 1)
 
+    # ── Vérification du dossier (« Vérifié et Validé ») ──
+
+    def _build_verification_card(self) -> QWidget:
+        p = theme_manager.palette
+        s = theme_manager.font_size
+        card = QFrame()
+        card.setObjectName("info_card")
+        card.setAttribute(Qt.WA_StyledBackground, True)
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(ds.space_md, ds.space_md, ds.space_md, ds.space_md)
+        cl.setSpacing(ds.space_xs)
+
+        title = QLabel("Vérification du dossier — Vérifié et Validé")
+        title.setStyleSheet(
+            f"font-size: {s(14)}px; font-weight: bold; color: {p.text_strong}; border: none;")
+        cl.addWidget(title)
+
+        self._check_progress = QLabel("")
+        self._check_progress.setStyleSheet(
+            f"font-size: {s(12)}px; color: {p.text_soft}; border: none;")
+        cl.addWidget(self._check_progress)
+
+        for key, label in BladoDatabase.DOSSIER_CHECK_ITEMS:
+            row = QHBoxLayout()
+            row.setSpacing(ds.space_xs)
+            cb = QCheckBox(label)
+            cb.setStyleSheet(
+                f"color: {p.text_strong}; font-size: {s(13)}px; "
+                f"spacing: {ds.space_xs}px; background: transparent;")
+            cb.toggled.connect(lambda checked, k=key: self._on_check_toggled(k, checked))
+            row.addWidget(cb)
+            info = QLabel("")
+            info.setStyleSheet(
+                f"color: {p.text_soft}; font-size: {s(11)}px; border: none;")
+            info.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            row.addWidget(info, 1)
+            cl.addLayout(row)
+            self._check_boxes[key] = cb
+            self._check_details[key] = info
+
+        return card
+
+    def _refresh_verification_checks(self):
+        staff_id = self._staff.get("id", 0)
+        checks = BladoDatabase.get_dossier_checks(staff_id)
+        self._loading_checks = True
+        try:
+            for key, label in BladoDatabase.DOSSIER_CHECK_ITEMS:
+                cb = self._check_boxes.get(key)
+                if not cb:
+                    continue
+                c = checks.get(key, {})
+                cb.setChecked(bool(c.get("validated")))
+                if c.get("validated"):
+                    when = ""
+                    if c.get("validated_at"):
+                        try:
+                            when = c["validated_at"].strftime("%d/%m/%Y")
+                        except Exception:
+                            when = ""
+                    self._check_details[key].setText(
+                        f"Vérifié et Validé le {when} par {c.get('validated_by') or '—'}")
+                else:
+                    self._check_details[key].setText("Non vérifié")
+        finally:
+            self._loading_checks = False
+        self._update_check_progress()
+
+    def _update_check_progress(self):
+        progress = BladoDatabase.dossier_validation_progress(self._staff.get("id", 0))
+        done, total = progress["validated"], progress["total"]
+        if done >= total and total > 0:
+            self._check_progress.setStyleSheet(
+                f"font-size: {theme_manager.font_size(12)}px; font-weight: bold; "
+                f"color: {theme_manager.palette.success}; border: none;")
+            self._check_progress.setText(f"✓ Dossier validé — {done}/{total}")
+        else:
+            self._check_progress.setStyleSheet(
+                f"font-size: {theme_manager.font_size(12)}px; "
+                f"color: {theme_manager.palette.text_soft}; border: none;")
+            self._check_progress.setText(f"Éléments validés : {done}/{total}")
+
+    @safe_slot("StaffDetail._on_check_toggled")
+    def _on_check_toggled(self, item_key: str, checked: bool):
+        if self._loading_checks:
+            return
+        by = session.full_name or session.email or "—"
+        BladoDatabase.set_dossier_check(self._staff.get("id", 0), item_key, checked, by)
+        self._update_check_progress()
+
     # ── Header (Q9c + Q22) ──
 
     def _build_header(self) -> QWidget:
@@ -439,7 +538,7 @@ class StaffDetail(QWidget, StaffDetailLoaderMixin):
 
         self._status_line = QLabel("")
         self._status_line.setStyleSheet(
-            f"font-size: {s(11)}px; color: {p.primary}; border: none;")
+            f"font-size: {s(12)}px; color: {p.primary}; border: none;")
         identity.addWidget(self._status_line)
 
         hl.addLayout(identity, 1)
@@ -482,7 +581,7 @@ class StaffDetail(QWidget, StaffDetailLoaderMixin):
             QPushButton {{ background: transparent; color: {p.text_soft};
             border: 1px solid {p.outline}; border-radius: {ds.radius_xs}px;
             padding: {ds.space_xxs}px {ds.space_sm}px;
-            font-size: {s(11)}px; }}
+            font-size: {s(12)}px; }}
             QPushButton:hover {{ background: {p.surface_variant}; color: {p.text_strong}; }}
         """)
         manage_btn.clicked.connect(self._on_manage_categories)
@@ -533,7 +632,7 @@ class StaffDetail(QWidget, StaffDetailLoaderMixin):
         cell.setSpacing(ds.space_xxs)
         lbl = QLabel(label)
         lbl.setStyleSheet(
-            f"font-size: {s(11)}px; color: {p.text_soft}; border: none;")
+            f"font-size: {s(12)}px; color: {p.text_soft}; border: none;")
         cell.addWidget(lbl)
         val = str(value) if value is not None else "—"
         vl = QLabel(val)
@@ -629,7 +728,7 @@ class StaffDetail(QWidget, StaffDetailLoaderMixin):
         table = M3TableWidget()
         table.setEditTriggers(M3TableWidget.DoubleClicked | M3TableWidget.EditKeyPressed)
         table.setSelectionBehavior(M3TableWidget.SelectRows)
-        table.verticalHeader().setDefaultSectionSize(ds.table_row_min)
+        table.verticalHeader().setDefaultSectionSize(ds.field_height)
         table.setStyleSheet(ds.table_qss())
         table.setColumnCount(4)
         table.set_headers(["Date", "Motif", "Note", ""])
@@ -747,6 +846,7 @@ class StaffDetail(QWidget, StaffDetailLoaderMixin):
         dlg = CategoryManageDialog(parent=self)
         if dlg.exec():
             self._rebuild_from_db()
+            QMessageBox.information(self, "Blado", "Catégories mises à jour.")
 
     def _rebuild_from_db(self):
         """Reconstruit completement le sidebar et les pages workspace depuis la DB."""
@@ -809,3 +909,14 @@ class StaffDetail(QWidget, StaffDetailLoaderMixin):
                         if si.widget():
                             si.widget().deleteLater()
         self._load_full()
+        # Photo du header — rechargée après édition (nouvelle photo éventuelle)
+        if hasattr(self, "_photo_lbl"):
+            photo_id = self._staff.get("id", 0)
+            photo_path = _find_photo(photo_id)
+            if photo_path:
+                pix = QPixmap(photo_path).scaled(
+                    theme_manager.image.logo, theme_manager.image.logo,
+                    Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            else:
+                pix = _make_avatar(self._staff.get("full_name", ""), theme_manager.image.logo)
+            self._photo_lbl.setPixmap(pix)

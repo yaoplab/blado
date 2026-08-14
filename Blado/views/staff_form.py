@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 
 from PySide6.QtCore import Qt, QDate
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout, QLabel, QLineEdit, QCheckBox,
     QPushButton, QDateEdit, QComboBox, QFileDialog, QScrollArea, QWidget, QFrame,
@@ -231,7 +232,7 @@ class StaffFormDialog(ThemedDialog):
     def _field_row(self, label: str, widget: QWidget, parent_layout) -> None:
         p = theme_manager.palette
         lbl = QLabel(label)
-        lbl.setStyleSheet(f"font-size: {theme_manager.font_size(11)}px; color: {p.text_soft}; border: none;")
+        lbl.setStyleSheet(f"font-size: {theme_manager.font_size(12)}px; color: {p.text_soft}; border: none;")
         parent_layout.addWidget(lbl)
         parent_layout.addWidget(widget)
 
@@ -250,11 +251,11 @@ class StaffFormDialog(ThemedDialog):
         cb.setStyleSheet(f"""
             QComboBox {{
                 background: transparent; border: 1px solid {p.outline};
-                border-radius: {ds.radius_xs}px; padding: {ds.space_xs}px;
+                border-radius: {ds.radius_xs}px; padding: 0 {ds.space_md}px;
                 color: {p.text_strong}; font-size: {theme_manager.font_size(13)}px;
             }}
             QComboBox:focus {{ border-color: {p.primary}; }}
-            QComboBox::drop-down {{ border: none; width: 24px; }}
+            QComboBox::drop-down {{ border: none; width: {ds.space_lg}px; }}
         """)
         return cb
 
@@ -265,7 +266,7 @@ class StaffFormDialog(ThemedDialog):
         p = theme_manager.palette
         card, cl = self._section_card("Identité", "person")
         grid = QGridLayout()
-        grid.setSpacing(ds.space_xs)
+        grid.setSpacing(ds.space_sm)
 
         self._f_civility = self._make_combo(CIVILITIES)
         self._field_row("Civilité", self._f_civility, grid)
@@ -309,7 +310,18 @@ class StaffFormDialog(ThemedDialog):
         self._f_id_expiry.setStyleSheet(ds.flat_input_qss())
         self._field_row("Date expiration", self._f_id_expiry, grid)
 
-        # Photo
+        # Photo — prévisualisation + bouton de sélection
+        photo_row = QWidget()
+        pr = QHBoxLayout(photo_row)
+        pr.setContentsMargins(0, 0, 0, 0)
+        pr.setSpacing(ds.space_sm)
+        self._photo_preview = QLabel()
+        self._photo_preview.setFixedSize(ds.space_xxl, ds.space_xxl)
+        self._photo_preview.setAlignment(Qt.AlignCenter)
+        self._photo_preview.setStyleSheet(
+            f"border: 1px solid {p.outline}; border-radius: {ds.radius_xs}px; "
+            f"background: {p.surface_variant};")
+        pr.addWidget(self._photo_preview)
         self._photo_btn = QPushButton("  Photo d'identité...")
         self._photo_btn.setCursor(Qt.PointingHandCursor)
         self._photo_btn.setFixedHeight(ds.field_height)
@@ -319,7 +331,9 @@ class StaffFormDialog(ThemedDialog):
             QPushButton:hover {{ border-color: {p.primary}; }}
         """)
         self._photo_btn.clicked.connect(self._on_upload_photo)
-        self._field_row("Photo d'identité", self._photo_btn, grid)
+        pr.addWidget(self._photo_btn)
+        pr.addStretch()
+        self._field_row("Photo d'identité", photo_row, grid)
 
         cl.addLayout(grid)
         return card
@@ -330,7 +344,7 @@ class StaffFormDialog(ThemedDialog):
     def _section_contact(self):
         card, cl = self._section_card("Contact", "location_on")
         grid = QGridLayout()
-        grid.setSpacing(ds.space_xs)
+        grid.setSpacing(ds.space_sm)
 
         self._f_email = self._make_field("email@ecole.org")
         self._field_row("Email professionnel", self._f_email, grid)
@@ -359,7 +373,7 @@ class StaffFormDialog(ThemedDialog):
     def _section_professional(self):
         card, cl = self._section_card("Professionnel", "work")
         grid = QGridLayout()
-        grid.setSpacing(ds.space_xs)
+        grid.setSpacing(ds.space_sm)
 
         self._f_matricule = self._make_field("Matricule interne")
         self._field_row("Matricule", self._f_matricule, grid)
@@ -376,11 +390,11 @@ class StaffFormDialog(ThemedDialog):
         combo_style = f"""
             QComboBox {{
                 background: transparent; border: 1px solid {p.outline};
-                border-radius: {ds.radius_xs}px; padding: {ds.space_xs}px;
+                border-radius: {ds.radius_xs}px; padding: 0 {ds.space_md}px;
                 color: {p.text_strong}; font-size: {theme_manager.font_size(13)}px;
             }}
             QComboBox:focus {{ border-color: {p.primary}; }}
-            QComboBox::drop-down {{ border: none; width: 24px; }}
+            QComboBox::drop-down {{ border: none; width: {ds.space_lg}px; }}
         """
         self._f_Service = QComboBox()
         self._f_Service.setFixedHeight(ds.field_height)
@@ -545,8 +559,11 @@ class StaffFormDialog(ThemedDialog):
     def _load_Servicees(self):
         self._f_Service.clear()
         self._f_Service.addItem("—", None)
+        # Seulement les services activés — les placeholders "Service NN" du seed
+        # (enabled=FALSE) ne doivent pas être proposés.
         for c in BladoDatabase.get_services():
-            self._f_Service.addItem(c["label"], c["id"])
+            if c.get("enabled"):
+                self._f_Service.addItem(c["label"], c["id"])
 
     def _load_supervisors(self):
         self._f_supervisor.clear()
@@ -606,6 +623,15 @@ class StaffFormDialog(ThemedDialog):
             for lang in BladoDatabase.get_languages(staff_id):
                 self._add_language_row(lang)
 
+        # Photo existante — prévisualisation dans le popup
+        if hasattr(self, "_photo_preview") and staff_id:
+            from Blado.views.staff_grid import _find_photo
+            photo_path = _find_photo(staff_id)
+            if photo_path:
+                pix = QPixmap(photo_path).scaled(
+                    ds.space_xxl, ds.space_xxl, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                self._photo_preview.setPixmap(pix)
+
     # ------------------------------------------------------------------
     # Photo upload
     # ------------------------------------------------------------------
@@ -616,7 +642,12 @@ class StaffFormDialog(ThemedDialog):
             "Images (*.png *.jpg *.jpeg)")
         if path:
             self._photo_path = path
-            self._photo_btn.setText(f"  Photo: {path.split('/')[-1]}")
+            self._photo_btn.setText(f"  Photo: {path.split('/')[-1].split(chr(92))[-1]}")
+            # Prévisualisation immédiate dans le popup
+            if hasattr(self, "_photo_preview"):
+                pix = QPixmap(path).scaled(
+                    ds.space_xxl, ds.space_xxl, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                self._photo_preview.setPixmap(pix)
 
     # ------------------------------------------------------------------
     # Save
@@ -631,6 +662,29 @@ class StaffFormDialog(ThemedDialog):
 
     @safe_slot("StaffFormDialog._on_save")
     def _on_save(self):
+        # Formulaire restreint (ex. "degrees" depuis la fiche employé) : les
+        # sections Identité/Contact ne sont pas construites — on ne sauvegarde
+        # que ce qui est affiché.
+        if self._scope:
+            staff_id = self._staff_data.get("id") if self._staff_data else self._new_id
+            if not staff_id:
+                self._show_error("Employé introuvable.")
+                return
+            try:
+                if self._scope != "identity":
+                    self._save_degrees(staff_id)
+                    self._save_languages(staff_id)
+                # Photo — sauvegardée même en édition restreinte (scope identity)
+                self._save_photo(staff_id)
+                self.accept()
+            except Exception:
+                import traceback
+                traceback.print_exc()
+                self._show_error(
+                    "Une erreur est survenue lors de l'enregistrement.\n"
+                    "Vérifiez les logs pour plus de détails.")
+            return
+
         first = self._f_first.text().strip()
         last = self._f_last.text().strip()
         if not last or not first:
@@ -697,14 +751,7 @@ class StaffFormDialog(ThemedDialog):
                     self._save_languages(staff_id)
 
             # Photo — sauvegarde dans Blado/photos/ (dossier prioritaire)
-            if self._photo_path and staff_id:
-                import shutil
-                photo_dir = os.path.normpath(
-                    os.path.join(os.path.dirname(__file__), "..", "..",
-                                 "Blado", "photos"))
-                os.makedirs(photo_dir, exist_ok=True)
-                dest = os.path.join(photo_dir, f"{staff_id}.png")
-                shutil.copy2(self._photo_path, dest)
+            self._save_photo(staff_id)
 
             self.accept()
 
@@ -714,6 +761,18 @@ class StaffFormDialog(ThemedDialog):
             self._show_error(
                 "Une erreur est survenue lors de l'enregistrement.\n"
                 "Vérifiez les logs pour plus de détails.")
+
+    def _save_photo(self, staff_id: int):
+        """Copie la photo choisie dans Blado/photos/<id>.png (lu par la grille)."""
+        if not self._photo_path or not staff_id:
+            return
+        import shutil
+        photo_dir = os.path.normpath(
+            os.path.join(os.path.dirname(__file__), "..", "..",
+                         "Blado", "photos"))
+        os.makedirs(photo_dir, exist_ok=True)
+        dest = os.path.join(photo_dir, f"{staff_id}.png")
+        shutil.copy2(self._photo_path, dest)
 
     def _save_degrees(self, staff_id: int):
         for i in range(self._degree_layout.count()):

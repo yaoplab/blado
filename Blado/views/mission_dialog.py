@@ -11,6 +11,7 @@ from PySide6.QtCore import QDate
 from bladocommon.design_system import ds
 from bladocommon.theme import theme_manager
 from bladocommon.safe_slot import safe_slot
+from bladocommon.session import session
 from phibuilder.widgets.button import M3Button, ButtonVariant
 from phibuilder.widgets.label import M3Label
 from phibuilder.widgets.textfield import M3TextField
@@ -79,7 +80,7 @@ class MissionPage(QWidget):
         card.setStyleSheet(f"background:{p.surface};border:1px solid {p.outline_variant};border-radius:{ds.radius_sm}px;")
         cl = QVBoxLayout(card)
         cl.setContentsMargins(ds.space_sm, ds.space_xs, ds.space_sm, ds.space_xs)
-        cl.setSpacing(2)
+        cl.setSpacing(ds.space_xxs)
         vl = QLabel(value)
         vl.setStyleSheet(f"font-size:{ds.font_h1}px;font-weight:bold;color:{p.primary};border:none;")
         vl.setObjectName("kpi_val")
@@ -90,8 +91,10 @@ class MissionPage(QWidget):
         return card
 
     def _load(self):
-        self._missions = BladoDatabase.get_missions() or []
-        kpis = BladoDatabase.get_missions_kpis()
+        # BLADO multi-clients : le client actif (mode consultant) filtre les missions
+        ent_id = session.entreprise_id if session.mode == "consultant" else None
+        self._missions = BladoDatabase.get_missions(ent_id) or []
+        kpis = BladoDatabase.get_missions_kpis(ent_id)
         # Update KPIs
         for i, key in enumerate(["actives", "montant_total", "total"]):
             w = self._kpi_row.itemAt(i).widget()
@@ -133,6 +136,7 @@ class MissionPage(QWidget):
             data = dlg.get_data()
             BladoDatabase.save_mission(data)
             self._load()
+            QMessageBox.information(self, "Blado", "Mission enregistrée.")
 
     def _on_edit(self, mission: dict):
         dlg = MissionDialog(self._phi, mission, parent=self)
@@ -140,6 +144,7 @@ class MissionPage(QWidget):
             data = dlg.get_data()
             data["id"] = mission["id"]
             BladoDatabase.save_mission(data)
+            QMessageBox.information(self, "Blado", "Mission modifiée.")
             self._load()
 
     @safe_slot("MissionPage._restyle")

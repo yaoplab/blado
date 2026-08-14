@@ -4,7 +4,7 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QMessageBox, QDialog, QFormLayout, QColorDialog,
-    QTableWidgetItem, QAbstractItemView,
+    QTableWidgetItem, QAbstractItemView, QComboBox,
 )
 from bladocommon.design_system import ds
 from bladocommon.theme import theme_manager
@@ -15,7 +15,7 @@ from phibuilder.widgets.textfield import M3TextField
 from phibuilder.widgets.table import M3TableWidget
 from Blado.common.blado_database import BladoDatabase
 
-COLS = ["ID", "Service", "Code", "Actif", "Employés", "Libres", "Couleur", ""]
+COLS = ["ID", "Service", "Code", "Client", "Actif", "Employés", "Libres", "Couleur", ""]
 
 
 class ServicePage(QWidget):
@@ -61,13 +61,14 @@ class ServicePage(QWidget):
         self._table.verticalHeader().setVisible(False)
         self._table.horizontalHeader().setStretchLastSection(True)
         self._table.setColumnWidth(0, 40)
-        self._table.setColumnWidth(1, 200)
+        self._table.setColumnWidth(1, 170)
         self._table.setColumnWidth(2, 55)
-        self._table.setColumnWidth(3, 50)
-        self._table.setColumnWidth(4, 70)
-        self._table.setColumnWidth(5, 60)
-        self._table.setColumnWidth(6, 70)
-        self._table.setColumnWidth(7, 80)
+        self._table.setColumnWidth(3, 120)
+        self._table.setColumnWidth(4, 50)
+        self._table.setColumnWidth(5, 70)
+        self._table.setColumnWidth(6, 60)
+        self._table.setColumnWidth(7, 70)
+        self._table.setColumnWidth(8, 80)
         self._table.setStyleSheet(ds.table_qss())
         layout.addWidget(self._table, 1)
 
@@ -98,30 +99,40 @@ class ServicePage(QWidget):
             code_item.setTextAlignment(Qt.AlignCenter)
             self._table.setItem(row, 2, code_item)
 
+            # Colonne Client (entreprise cliente rattachée au service)
+            client_item = QTableWidgetItem(svc.get("entreprise_nom") or "—")
+            client_item.setTextAlignment(Qt.AlignCenter)
+            self._table.setItem(row, 3, client_item)
+
             # Colonne Actif
             actif_item = QTableWidgetItem("Oui" if svc.get("enabled") else "Non")
             actif_item.setTextAlignment(Qt.AlignCenter)
-            self._table.setItem(row, 3, actif_item)
+            self._table.setItem(row, 4, actif_item)
 
             emp_item = QTableWidgetItem(str(active))
             emp_item.setTextAlignment(Qt.AlignCenter)
-            self._table.setItem(row, 4, emp_item)
+            self._table.setItem(row, 5, emp_item)
 
             free_item = QTableWidgetItem(str(free))
             free_item.setTextAlignment(Qt.AlignCenter)
-            self._table.setItem(row, 5, free_item)
+            self._table.setItem(row, 6, free_item)
 
             color_widget = QLabel()
-            color_widget.setFixedSize(32, 20)
+            color_widget.setFixedSize(ds.field_height, ds.space_md)
             color_widget.setStyleSheet(
                 f"background:{color_hex};border-radius:{ds.radius_xs}px;"
                 f"border:1px solid {p.outline};")
-            self._table.setCellWidget(row, 6, color_widget)
+            # centrage de la pastille dans la cellule
+            cell_w = QWidget()
+            cell_lay = QVBoxLayout(cell_w)
+            cell_lay.setContentsMargins(0, 0, 0, 0)
+            cell_lay.addWidget(color_widget, 0, Qt.AlignCenter)
+            self._table.setCellWidget(row, 7, cell_w)
 
             edit_btn = QPushButton("Modifier")
             edit_btn.setCursor(Qt.PointingHandCursor)
             edit_btn.clicked.connect(lambda checked, s=svc: self._on_edit_service(s))
-            self._table.setCellWidget(row, 7, edit_btn)
+            self._table.setCellWidget(row, 8, edit_btn)
 
         # Mettre à jour le bouton
         free_svc = BladoDatabase.get_first_disabled_service()
@@ -142,12 +153,25 @@ class ServicePage(QWidget):
         dlg = ServiceDialog(self._phi, svc, parent=self)
         if dlg.exec():
             data = dlg.get_data()
-            data["enabled"] = True
+            # Le boolean « Service actif » vient de la case du dialogue
+            # (cochée par défaut à l'activation).
             BladoDatabase.create_service(data)
-            BladoDatabase.create_service_gabarit(data["id"], 99)
+            if data.get("enabled"):
+                BladoDatabase.create_service_gabarit(data["id"], 99)
             self._load()
 
+    @safe_slot("service_page_edit")
     def _on_edit_service(self, svc: dict):
+        # Protection : modifier un service qui a des employés actifs demande
+        # une confirmation explicite.
+        active = svc.get("active_count", 0) or 0
+        if active > 0:
+            reply = QMessageBox.question(
+                self, "Confirmer",
+                f"« {svc['label']} » contient {active} employé(s) actif(s).\n"
+                f"Modifier ce service quand même ?")
+            if reply != QMessageBox.Yes:
+                return
         dlg = ServiceDialog(self._phi, svc, parent=self)
         if dlg.exec():
             data = dlg.get_data()
@@ -170,8 +194,8 @@ class ServiceDialog(QDialog):
         self._phi = phi
         self._service = service
         self._color = service.get("color", "white")
-        is_new = not service.get("enabled")
-        self.setWindowTitle("Activer un service" if is_new else "Modifier le service")
+        self._is_new = not service.get("enabled")
+        self.setWindowTitle("Activer un service" if self._is_new else "Modifier le service")
         self.setMinimumWidth(450)
         self._build_ui()
 
@@ -197,12 +221,41 @@ class ServiceDialog(QDialog):
         self._code_field = M3TextField()
         self._code_field.setFixedHeight(ds.field_height)
         self._code_field.setText(self._service.get("code", ""))
+        if not self._is_new:
+            # Protection : le code identifie le service (S01, S02…) — il ne se
+            # modifie qu'à l'activation, jamais sur un service en service.
+            self._code_field.setReadOnly(True)
+            self._code_field.setToolTip("Le code ne se modifie qu'à l'activation du service.")
         form.addRow("Code :", self._code_field)
 
         self._desc_field = M3TextField()
         self._desc_field.setFixedHeight(ds.field_height)
         self._desc_field.setText(self._service.get("description", ""))
         form.addRow("Description :", self._desc_field)
+
+        # Entreprise cliente (BLADO multi-clients : les employés du service
+        # héritent de ce client — jamais mélangés entre clients)
+        self._client_combo = QComboBox()
+        self._client_combo.setFixedHeight(ds.field_height)
+        self._client_combo.setStyleSheet(ds.flat_input_qss())
+        self._client_combo.addItem("— Aucune —", None)
+        for e in BladoDatabase.get_entreprises():
+            self._client_combo.addItem(e["nom"], e["id"])
+        cur_id = self._service.get("entreprise_id")
+        if cur_id:
+            idx = self._client_combo.findData(cur_id)
+            if idx >= 0:
+                self._client_combo.setCurrentIndex(idx)
+        form.addRow("Entreprise cliente :", self._client_combo)
+
+        # Boolean « Service actif » explicite dans l'UI
+        from PySide6.QtWidgets import QCheckBox
+        self._enabled_cb = QCheckBox("Service actif (activé)")
+        self._enabled_cb.setChecked(True if self._is_new else bool(self._service.get("enabled")))
+        self._enabled_cb.setStyleSheet(
+            f"color: {p.text_strong}; font-size: {ds.font_body}px; "
+            f"spacing: {ds.space_xs}px; background: transparent;")
+        form.addRow(self._enabled_cb)
 
         self._color_btn = QPushButton(self._color)
         self._color_btn.setFixedHeight(ds.field_height)
@@ -221,9 +274,26 @@ class ServiceDialog(QDialog):
         cancel.clicked.connect(self.reject)
         btns.addWidget(cancel)
         save = M3Button("Enregistrer", variant=ButtonVariant.FILLED, theme=self._phi)
-        save.clicked.connect(self.accept)
+        save.clicked.connect(self._on_validate)
         btns.addWidget(save)
         layout.addLayout(btns)
+
+    def _on_validate(self):
+        # Protection : pas de service sans nom
+        if not (self._label_field.text() or "").strip():
+            QMessageBox.warning(self, "Champ requis", "Le nom du service est obligatoire.")
+            return
+        # Protection : désactivation d'un service qui a des employés actifs
+        if not self._enabled_cb.isChecked():
+            active = self._service.get("active_count", 0) or 0
+            if active > 0:
+                reply = QMessageBox.question(
+                    self, "Confirmer",
+                    f"Ce service contient {active} employé(s) actif(s).\n"
+                    f"Ils resteront rattachés à ce service désactivé.\nContinuer ?")
+                if reply != QMessageBox.Yes:
+                    return
+        self.accept()
 
     def _pick_color(self):
         from PySide6.QtGui import QColor
@@ -242,4 +312,6 @@ class ServiceDialog(QDialog):
             "code": self._code_field.text(),
             "description": self._desc_field.text(),
             "color": self._color,
+            "enabled": self._enabled_cb.isChecked(),
+            "entreprise_id": self._client_combo.currentData(),
         }

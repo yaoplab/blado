@@ -137,7 +137,7 @@ class LoginWindow(QWidget):
         rd = ds.radius_sm
         return f"""
             QWidget#root {{ background: {p.background}; }}
-            QLabel {{ font-size: {s(13)}px; color: {p.text_strong}; }}
+            QLabel {{ font-size: {s(13)}px; color: {p.text_strong}; background: transparent; }}
             QTabWidget::pane {{
                 border: 1px solid {p.outline_variant}; background: {p.surface};
                 border-radius: {rd}px;
@@ -174,25 +174,35 @@ class LoginWindow(QWidget):
         """
 
     def _init_ui(self):
+        # objectName "root" : applique la règle QWidget#root de _style() —
+        # la fenêtre garde un fond uniforme quel que soit le thème global actif.
+        self.setObjectName("root")
         self.setStyleSheet(self._style())
-        W = 420
-        H = int(W * 1.618033988749895)
+        W = 445
+        H = int(W * 1.618033988749895)   # ≈ 720 : hauteur suffisante pour le logo + les champs
         self.setFixedSize(W, H)
 
         outer = QVBoxLayout()
         outer.setContentsMargins(theme_manager.image.theme_btn, ds.table_row_min, theme_manager.image.theme_btn, ds.table_row_min)
         outer.setSpacing(0)
 
-        logo_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-            "LarcSuperviseur",
-            "img",
-            "logoAEC.png",
-        )
+        # Logo : photos\logo.png en dev ; _internal\photos ou {app}\logo une fois installé
+        _here = os.path.dirname(os.path.abspath(__file__))   # bladocommon\
+        logo_candidates = [
+            os.path.join(_here, "..", "..", "photos", "logo.png"),  # dev : D:\blado\photos\logo.png
+            os.path.join(_here, "..", "photos", "logo.png"),        # onedir : _internal\photos\logo.png
+            os.path.join(_here, "..", "..", "logo", "logo.png"),    # installé : {app}\logo\logo.png
+        ]
         self._logo_label = QLabel()
-        if os.path.exists(logo_path):
-            pix = QPixmap(logo_path)
-            self._logo_pixmap = pix.scaledToHeight(89, Qt.SmoothTransformation)
+        pix = None
+        for lp in logo_candidates:
+            if os.path.exists(lp):
+                pix = QPixmap(lp)
+                break
+        if pix and not pix.isNull():
+            # Bannière bornée en largeur ET en hauteur : la fenêtre a une taille
+            # fixe, un logo trop haut poussait les champs hors cadre.
+            self._logo_pixmap = pix.scaled(340, 110, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             self._logo_label.setPixmap(self._logo_pixmap)
         else:
             self._logo_pixmap = None

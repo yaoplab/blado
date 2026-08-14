@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import os
 
+import shiboken6
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QPixmap, QPainter, QColor
 from PySide6.QtWidgets import (
@@ -95,7 +97,7 @@ class _StaffCard(QFrame):
         s = theme_manager.font_size
         layout = QVBoxLayout(self)
         layout.setContentsMargins(ds.space_xs, ds.space_xs, ds.space_xs, ds.space_xs)
-        layout.setSpacing(3)
+        layout.setSpacing(ds.space_xxs)
 
         # Photo
         photo_path = _find_photo(self._data.get("id", 0))
@@ -187,6 +189,18 @@ class _StaffCard(QFrame):
         else:
             self._Service_lbl = None
 
+        # Entreprise cliente (BLADO multi-clients)
+        ent_label = self._data.get("entreprise_nom", "") or ""
+        if ent_label:
+            self._ent_lbl = QLabel(ent_label)
+            self._ent_lbl.setAlignment(Qt.AlignCenter)
+            self._ent_lbl.setStyleSheet(
+                f"font-size: {s(9)}px; font-weight: bold; color: {p.primary}; border: none;")
+            layout.addWidget(self._ent_lbl)
+            self._styled_labels.append(self._ent_lbl)
+        else:
+            self._ent_lbl = None
+
         layout.addStretch()
 
         # Bouton événement
@@ -236,6 +250,10 @@ class _StaffCard(QFrame):
         if self._Service_lbl:
             self._Service_lbl.setStyleSheet(
                 f"font-size: {s(9)}px; color: {p.text_soft}; border: none;")
+        # Entreprise cliente
+        if self._ent_lbl:
+            self._ent_lbl.setStyleSheet(
+                f"font-size: {s(9)}px; font-weight: bold; color: {p.primary}; border: none;")
         # Statut
         if self._status_lbl:
             status = (self._data.get("emp_status") or "actif").lower()
@@ -276,6 +294,7 @@ class StaffGrid(QWidget):
         self._view_mode = "grid"  # "grid" or "table"
         self._search_text = ""
         self._filter_service: int | None = None
+        self._filter_entreprise: int | None = None
         self._filter_status: str | None = None
         self._sort_by = "name"
         self._all_data: list[dict] = []
@@ -339,6 +358,17 @@ class StaffGrid(QWidget):
         self._service_combo.currentIndexChanged.connect(self._on_filter_changed)
         tb.addWidget(self._service_combo)
 
+        # Entreprise cliente filter (BLADO multi-clients : ne jamais mélanger
+        # les employés de deux clients)
+        self._client_combo = QComboBox()
+        self._client_combo.addItem("Tous les clients", None)
+        for e in BladoDatabase.get_entreprises():
+            self._client_combo.addItem(e["nom"], e["id"])
+        self._client_combo.setFixedHeight(ds.field_height)
+        self._client_combo.setStyleSheet(ds.flat_input_qss())
+        self._client_combo.currentIndexChanged.connect(self._on_filter_changed)
+        tb.addWidget(self._client_combo)
+
         # Status filter — valeurs exactes de emp_status en base
         self._status_combo = QComboBox()
         self._status_combo.addItem("Tous statuts", None)
@@ -386,7 +416,7 @@ class StaffGrid(QWidget):
         export_btn.setCursor(Qt.PointingHandCursor)
         export_btn.setStyleSheet(f"""
             QPushButton {{ background: transparent; color: {p.primary}; border: 1px solid {p.primary};
-            border-radius: {ds.radius_xs}px; padding: {ds.space_xxs}px {ds.space_xs}px; font-size: {theme_manager.font_size(11)}px; }}
+            border-radius: {ds.radius_xs}px; padding: {ds.space_xxs}px {ds.space_xs}px; font-size: {theme_manager.font_size(12)}px; }}
             QPushButton:hover {{ background: {p.primary}; color: white; }}
         """)
         export_btn.clicked.connect(self._on_export_csv)
@@ -403,8 +433,11 @@ class StaffGrid(QWidget):
         self.refresh()
 
     @safe_slot("StaffGrid._on_filter_changed")
-    def _on_filter_changed(self):
+    def _on_filter_changed(self, _idx: int | None = None):
+        # NB : connecté à currentIndexChanged → le signal passe un index en
+        # plus — le paramètre facultatif évite le TypeError.
         self._filter_service = self._service_combo.currentData() or None
+        self._filter_entreprise = self._client_combo.currentData() or None
         self._filter_status = self._status_combo.currentData()
         self.refresh()
 
@@ -478,6 +511,7 @@ class StaffGrid(QWidget):
         from Blado.common.blado_database import BladoDatabase
         filters = {
             "service_id": self._filter_service,
+            "entreprise_id": self._filter_entreprise,
             "status": self._filter_status,
             "sort": self._sort_by,
         }
@@ -486,6 +520,16 @@ class StaffGrid(QWidget):
             search_text=self._search_text, filters=filters)
 
     def _render_grid(self):
+        # NB : QScrollArea.setWidget() DÉTRUIT le widget précédent — après un
+        # passage en mode table, _container (ou _table_view) est détruit et
+        # doit être recréé (sinon RuntimeError « object already deleted »).
+        if self._table_view is not None and not shiboken6.isValid(self._table_view):
+            self._table_view = None
+        if not shiboken6.isValid(self._container):
+            self._container = QWidget()
+            self._grid = QGridLayout(self._container)
+            self._grid.setContentsMargins(MARGIN, MARGIN, MARGIN, MARGIN)
+            self._grid.setSpacing(SPACING)
         if self._table_view:
             self._table_view.hide()
         self._scroll.setWidget(self._container)
@@ -524,13 +568,14 @@ class StaffGrid(QWidget):
                 if w.widget():
                     w.widget().deleteLater()
 
-        # Build table if needed, add to scroll
-        if not self._table_view:
+        # Build table if needed, add to scroll (recréée si détruite par un
+        # aller-retour en mode grille — cf. _render_grid)
+        if self._table_view is None or not shiboken6.isValid(self._table_view):
             self._table_view = M3TableWidget()
             self._table_view.setEditTriggers(M3TableWidget.NoEditTriggers)
             self._table_view.setSelectionBehavior(M3TableWidget.SelectRows)
             self._table_view.setAlternatingRowColors(False)
-            self._table_view.verticalHeader().setDefaultSectionSize(ds.table_row_min)
+            self._table_view.verticalHeader().setDefaultSectionSize(ds.field_height)
             self._table_view.setStyleSheet(ds.table_qss())
             self._table_view.doubleClicked.connect(self._on_table_double_click)
 

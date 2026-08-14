@@ -14,18 +14,24 @@ class StyleBuilder:
     def build(self) -> str:
         return "\n".join([
             self._global(), self._window(), self._button(), self._line_edit(),
-            self._combo(), self._checkbox_radio(), self._scrollbar(), self._slider(),
+            self._combo(), self._date_edit(), self._checkbox_radio(), self._scrollbar(), self._slider(),
             self._progress(), self._tabs(), self._menu(), self._tooltip(),
             self._groupbox(), self._list_tree(), self._splitter(), self._statusbar(), self._card(),
         ])
     def _global(self) -> str:
         return f"\n* {{ font-family: '{self.typo.family}'; font-size: {self.typo.body_medium.size}px; color: {self.c.on_surface}; background-color: transparent; }}\n"
     def _window(self) -> str:
-        return f"QMainWindow, QDialog, QWidget {{ background-color: {self.c.surface}; }}\n"
+        # NB : le sélecteur QWidget matche aussi les QLabel (sous-classes) —
+        # sans le reset ci-dessous, chaque libellé hériterait d'un fond opaque
+        # (rectangles blancs sur la sidebar grise, etc.).
+        return (f"QMainWindow, QDialog, QWidget {{ background-color: {self.c.surface}; }}\n"
+                f"QLabel {{ background-color: transparent; }}\n")
     def _button(self) -> str:
         p, h, r = self._sp(SpacingToken.MD), self._sp(SpacingToken.XL), self._sp(SpacingToken.SM)
+        # NB : le height QSS s'applique au CONTENU ; le padding s'ajoute par-dessus.
+        # padding vertical 0 → hauteur totale = 52 px (ds.button_height), pas 68.
         return f"""
-QPushButton {{ padding: {self._sp(SpacingToken.XS)}px {p}px; height: {h}px; font-weight: {self.typo.label_large.weight};
+QPushButton {{ padding: 0 {p}px; height: {h}px; font-weight: {self.typo.label_large.weight};
   font-size: {self.typo.label_large.size}px; letter-spacing: {self.typo.label_large.letter_spacing}px;
   border: none; border-radius: {r}px; background-color: {self.c.primary}; color: {self.c.on_primary}; }}
 QPushButton:hover {{ background-color: {self.c.primary_container}; color: {self.c.on_primary_container}; }}
@@ -36,37 +42,59 @@ QPushButton[flat="true"]:hover {{ background-color: rgba(0,0,0,0.05); }}
 """
     def _line_edit(self) -> str:
         r = self._sp(SpacingToken.XS)
+        # QLineEdit : hauteur totale 32 px (comme ds.field_height).
+        # QTextEdit/QPlainTextEdit : multilignes — pas de height, padding normal.
         return f"""
-QLineEdit, QTextEdit, QPlainTextEdit {{ padding: {self._sp(SpacingToken.XS)}px {self._sp(SpacingToken.MD)}px;
+QLineEdit {{ padding: 0 {self._sp(SpacingToken.MD)}px;
+  border: 1px solid {self.c.outline}; border-radius: {r}px; background-color: {self.c.surface}; color: {self.c.on_surface};
+  height: {self._sp(SpacingToken.LG) - self._sp(SpacingToken.XXS) // 2}px;
+  selection-background-color: {self.c.primary_container}; selection-color: {self.c.on_primary_container}; }}
+QTextEdit, QPlainTextEdit {{ padding: {self._sp(SpacingToken.XS)}px {self._sp(SpacingToken.MD)}px;
   border: 1px solid {self.c.outline}; border-radius: {r}px; background-color: {self.c.surface}; color: {self.c.on_surface};
   selection-background-color: {self.c.primary_container}; selection-color: {self.c.on_primary_container}; }}
 QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {{ border: 2px solid {self.c.primary}; }}
 QLineEdit:disabled {{ background-color: {self.c.surface_container_highest}; color: {self.c.on_surface}; }}
 """
+    def _date_edit(self) -> str:
+        # Sans règle dédiée, QDateEdit est peint par le style natif (texte bleu
+        # #0067C0 illisible sur fond clair). On l'aligne sur les QLineEdit.
+        # NB : rendu réel = height + 5 px (bordure 2 + boutons spin ~3)
+        # → height 27 donne un total de 32 px (mesuré, cf. lint_design section 8).
+        r = self._sp(SpacingToken.XS)
+        return f"""
+QDateEdit, QTimeEdit {{ padding: 0 {self._sp(SpacingToken.MD)}px;
+  border: 1px solid {self.c.outline}; border-radius: {r}px; background-color: {self.c.surface};
+  color: {self.c.on_surface}; height: {self._sp(SpacingToken.LG) - self._sp(SpacingToken.XXS) // 2 - 3}px; }}
+QDateEdit:focus, QTimeEdit:focus {{ border: 2px solid {self.c.primary}; }}
+QDateEdit::drop-down, QTimeEdit::drop-down {{ border: none; width: {self._sp(SpacingToken.LG)}px; }}
+QDateEdit::up-button, QDateEdit::down-button, QTimeEdit::up-button, QTimeEdit::down-button {{ height: {self._sp(SpacingToken.XS)}px; }}
+QCalendarWidget QWidget {{ background-color: {self.c.surface}; color: {self.c.on_surface}; }}
+QCalendarWidget QAbstractItemView {{ background-color: {self.c.surface}; color: {self.c.on_surface};
+  selection-background-color: {self.c.primary_container}; selection-color: {self.c.on_primary_container}; }}
+QCalendarWidget QToolButton {{ background-color: transparent; color: {self.c.on_surface};
+  border: none; padding: {self._sp(SpacingToken.XS)}px; }}
+"""
     def _combo(self) -> str:
         r = self._sp(SpacingToken.XS)
         return f"""
-QComboBox {{ padding: {self._sp(SpacingToken.XS)}px {self._sp(SpacingToken.MD)}px;
+QComboBox {{ padding: 0 {self._sp(SpacingToken.MD)}px;
   border: 1px solid {self.c.outline}; border-radius: {r}px; background-color: {self.c.surface};
-  color: {self.c.on_surface}; min-height: {self._sp(SpacingToken.XL)}px; }}
+  color: {self.c.on_surface}; height: {self._sp(SpacingToken.LG) - self._sp(SpacingToken.XXS) // 2}px; }}
 QComboBox:hover {{ border-color: {self.c.on_surface}; }}
 QComboBox:focus {{ border: 2px solid {self.c.primary}; }}
-QComboBox::drop-down {{ border: none; width: {self._sp(SpacingToken.XXL)}px; }}
+QComboBox::drop-down {{ border: none; width: {self._sp(SpacingToken.LG)}px; }}
 QComboBox::down-arrow {{ width: {self._sp(SpacingToken.MD)}px; height: {self._sp(SpacingToken.MD)}px; }}
 QComboBox QAbstractItemView {{ background-color: {self.c.surface}; border: 1px solid {self.c.outline};
   border-radius: {r}px; padding: {self._sp(SpacingToken.XS)}px; outline: none;
   selection-background-color: {self.c.primary_container}; selection-color: {self.c.on_primary_container}; }}
 """
     def _checkbox_radio(self) -> str:
-        s = self._sp(SpacingToken.LG)
+        # NB : aucune règle ::indicator — on laisse le style Fusion dessiner
+        # des cases traditionnelles (fond clair + coche sombre), pas des
+        # carrés bleus pleins (choix utilisateur, 2026-08-13).
         return f"""
 QCheckBox, QRadioButton {{ spacing: {self._sp(SpacingToken.MD)}px; color: {self.c.on_surface};
-  font-size: {self.typo.body_medium.size}px; }}
-QCheckBox::indicator, QRadioButton::indicator {{ width: {s}px; height: {s}px; }}
-QCheckBox::indicator:checked {{ background-color: {self.c.primary}; border-radius: {self._sp(SpacingToken.XS)}px; }}
-QCheckBox::indicator:unchecked {{ background-color: transparent; border: 2px solid {self.c.outline}; border-radius: {self._sp(SpacingToken.XS)}px; }}
-QRadioButton::indicator:checked {{ background-color: {self.c.primary}; border-radius: {s // 2}px; }}
-QRadioButton::indicator:unchecked {{ background-color: transparent; border: 2px solid {self.c.outline}; border-radius: {s // 2}px; }}
+  font-size: {self.typo.body_medium.size}px; background: transparent; }}
 """
     def _scrollbar(self) -> str:
         return f"""
@@ -103,8 +131,8 @@ QTabBar::tab {{ padding: {self._sp(SpacingToken.MD)}px {self._sp(SpacingToken.LG
   font-weight: {self.typo.label_large.weight}; font-size: {self.typo.label_large.size}px;
   color: {self.c.on_surface}; border: none; border-bottom: 2px solid transparent; }}
 QTabBar::tab:selected {{ color: {self.c.primary}; border-bottom: 2px solid {self.c.primary}; }}
-QTabBar::tab:hover {{ color: {self.c.primary_container}; }}
-QTabBar::tab:disabled {{ color: {self.c.outline}; }}
+QTabBar::tab:hover {{ color: {self.c.primary}; }}
+QTabBar::tab:disabled {{ color: {self.c.on_surface_variant}; }}
 """
     def _menu(self) -> str:
         return f"""

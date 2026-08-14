@@ -1,5 +1,5 @@
 """Blado — Journal de paie (liste des bulletins par mois)."""
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QMessageBox
 from PySide6.QtCore import QDate
 from PySide6.QtGui import QFont
 from bladocommon.design_system import ds
@@ -72,7 +72,7 @@ class PayslipListPage(QWidget):
         )
         cl = QVBoxLayout(card)
         cl.setContentsMargins(ds.space_sm, ds.space_xs, ds.space_sm, ds.space_xs)
-        cl.setSpacing(2)
+        cl.setSpacing(ds.space_xxs)
 
         lbl_title = M3Label(label)
         lbl_title.setStyleSheet(f"color:{p.text_soft};font-size:{ds.font_small}px;")
@@ -121,11 +121,13 @@ class PayslipListPage(QWidget):
 
     @safe_slot("payslip_list_launch")
     def _on_launch_clicked(self):
-        from Blado.views.payslip_run import PayslipRunPage
-        # Émet un signal pour changer de page dans le stacked widget
-        parent = self.parent()
-        if parent and hasattr(parent, "_switch_to"):
-            parent._switch_to("payslip_run")
+        # La page est reparentée par le QStackedWidget : remonter jusqu'à la
+        # fenêtre principale (qui possède _switch_to), pas au parent direct.
+        win = self.window()
+        if win is not None and hasattr(win, "_switch_to"):
+            win._switch_to("payslip_run")
+        else:
+            QMessageBox.warning(self, "Paie", "Impossible d'ouvrir le lancement de la paie.")
 
     @safe_slot("payslip_list_restyle")
     def _restyle_all(self):

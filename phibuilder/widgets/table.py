@@ -1,7 +1,10 @@
 from PySide6.QtWidgets import QTableWidget, QHeaderView, QSizePolicy, QAbstractItemView, QTableWidgetItem
 from PySide6.QtCore import Qt
 from phibuilder.theme import Theme
-from phibuilder.phi.scale import SpacingToken
+from phibuilder.phi.scale import SpacingToken, PhiScale
+
+_SCALE = PhiScale()  # base 4 — pour les tailles sans thème
+
 
 class M3TableWidget(QTableWidget):
     def __init__(self, rows: int = 0, columns: int = 0, theme: Theme | None = None, parent=None):
@@ -15,9 +18,18 @@ class M3TableWidget(QTableWidget):
         h.setSectionResizeMode(QHeaderView.Interactive)
         h.setMinimumSectionSize(80)
         v = self.verticalHeader()
-        v.setDefaultSectionSize(48)
+        # 32 px : lignes compactes (48 px avant = lignes surdimensionnées)
+        v.setDefaultSectionSize(_SCALE.spacing(SpacingToken.LG))
         v.setVisible(False)
         self._update_style()
+
+    def setItem(self, row: int, column: int, item: QTableWidgetItem):
+        # Centrage par défaut (horizontal + vertical) — les tables qui veulent
+        # un alignement particulier l'appliquent après via setTextAlignment.
+        if (item.textAlignment() & Qt.AlignHorizontal_Mask) == Qt.AlignLeft:
+            item.setTextAlignment(Qt.AlignCenter)
+        super().setItem(row, column, item)
+
     def _update_style(self):
         if self._theme is None:
             return
@@ -43,5 +55,7 @@ QHeaderView::section:hover {{ background-color: {c.surface_container_highest}; }
         row = self.rowCount()
         self.insertRow(row)
         for col, val in enumerate(values):
-            self.setItem(row, col, QTableWidgetItem(str(val)))
+            item = QTableWidgetItem(str(val))
+            item.setTextAlignment(Qt.AlignCenter)
+            self.setItem(row, col, item)
         return row

@@ -51,7 +51,7 @@ class BladoPayrollMixin:
         if not conn:
             return None
 
-        cfg = BladoDatabase.get_payroll_config()
+        cfg = BladoPayrollMixin.get_payroll_config()
         cnss_pct = cfg.get('cnss_employe', 4.0) / 100.0
 
         # 1. Salaire de base depuis le contrat actif
@@ -303,7 +303,7 @@ class BladoPayrollMixin:
             else:
                 cur.execute(query)
             for row in cur.fetchall():
-                if BladoDatabase.generate_payslip(row[0], month, year):
+                if BladoPayrollMixin.generate_payslip(row[0], month, year):
                     count += 1
             return count
         except Exception:

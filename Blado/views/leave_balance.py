@@ -5,7 +5,7 @@ from datetime import date
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
-    QTextEdit, QButtonGroup,
+    QTextEdit, QButtonGroup, QMessageBox,
 )
 
 from bladocommon.design_system import ds
@@ -94,7 +94,7 @@ class LeaveBalanceWidget(QWidget):
 
         label = LEAVE_LABELS.get(balance["leave_type"], balance["leave_type"])
         name = QLabel(label)
-        name.setStyleSheet(f"font-size: {s(11)}px; color: {p.text_soft}; border: none;")
+        name.setStyleSheet(f"font-size: {s(12)}px; color: {p.text_soft}; border: none;")
         cl.addWidget(name)
 
         days = QLabel(f"{remaining:.0f}")
@@ -178,7 +178,7 @@ class ValidateLeaveDialog(ThemedDialog):
         # ── Decision chips ──
         lbl = QLabel("Décision")
         lbl.setStyleSheet(
-            f"font-size: {s(11)}px; color: {p.text_soft}; font-weight: bold; border: none;")
+            f"font-size: {s(12)}px; color: {p.text_soft}; font-weight: bold; border: none;")
         layout.addWidget(lbl)
 
         chip_row = QHBoxLayout()
@@ -220,7 +220,7 @@ class ValidateLeaveDialog(ThemedDialog):
         # ── Note ──
         lbl2 = QLabel("Note de validation")
         lbl2.setStyleSheet(
-            f"font-size: {s(11)}px; color: {p.text_soft}; font-weight: bold; border: none;")
+            f"font-size: {s(12)}px; color: {p.text_soft}; font-weight: bold; border: none;")
         layout.addWidget(lbl2)
 
         self._note = QTextEdit()
@@ -413,6 +413,9 @@ class LeaveRequestHistory(QWidget):
             )
             self.refresh()
             self.leave_validated.emit()
+            QMessageBox.information(
+                self, "Blado",
+                "Demande de congé validée." if dlg.approved else "Demande de congé refusée.")
 
     @safe_slot("LeaveRequestHistory._on_revoke")
     def _on_revoke(self, request_data: dict):
@@ -426,3 +429,4 @@ class LeaveRequestHistory(QWidget):
         dlg = LeaveRequestDialog(self._staff.get("id", 0), parent=self)
         if dlg.exec():
             self.refresh()
+            QMessageBox.information(self, "Blado", "Demande de congé enregistrée.")

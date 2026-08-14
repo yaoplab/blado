@@ -138,6 +138,18 @@ class PayslipRunPage(QWidget):
         self._progress.setValue(1)
         self._progress.setVisible(False)
 
+        if count <= 0:
+            self._summary.setText(
+                f"⚠️ Aucun bulletin généré pour {self._month_combo.currentText()} {year}.\n"
+                "Vérifiez que des employés actifs ont un contrat actif."
+            )
+            QMessageBox.warning(
+                self, "Paie",
+                f"Aucun bulletin généré pour {self._month_combo.currentText()} {year}.\n\n"
+                "Vérifiez que des employés actifs ont un contrat actif.",
+            )
+            return
+
         self._summary.setText(f"✅ {count} bulletins générés avec succès.")
         QMessageBox.information(self, "Paie terminée", f"{count} bulletins générés.")
 

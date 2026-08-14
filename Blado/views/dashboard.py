@@ -11,6 +11,7 @@ from bladocommon.design_system import ds
 from bladocommon.icons import icon as md3_icon
 from bladocommon.theme import theme_manager
 from bladocommon.safe_slot import safe_slot
+from bladocommon.session import session
 
 from Blado.common.blado_database import BladoDatabase
 from Blado.views.charts import HBarCell, RingChart, StatChange, AlertRow, _SEGMENT_COLORS
@@ -250,6 +251,14 @@ class HRDashboard(QScrollArea):
         self._root_layout.addWidget(cmp_card)
         self._completeness_section = cmp_card
 
+        # ── Rangée 4 : Validations en attente (« Vérifié et Validé ») ──
+        val_card = _SectionCard("Vérifications en attente — Vérifié et Validé")
+        self._validation_rows_layout = QVBoxLayout()
+        self._validation_rows_layout.setSpacing(ds.space_xxs)
+        val_card.content_layout().addLayout(self._validation_rows_layout)
+        self._root_layout.addWidget(val_card)
+        self._validation_section = val_card
+
         self._root_layout.addStretch(1)
         self._restyle()
         self.refresh()
@@ -275,7 +284,10 @@ class HRDashboard(QScrollArea):
     # ════════════════════════════════════════════════════════════════
 
     def refresh(self):
-        kpis = BladoDatabase.get_dashboard_kpis()
+        # BLADO multi-clients : le client actif (mode consultant) filtre tout
+        # le tableau de bord (0 / None = toutes les entreprises)
+        self._ent_id = session.entreprise_id if session.mode == "consultant" else None
+        kpis = BladoDatabase.get_dashboard_kpis(self._ent_id)
 
         def _v(key, default="—"):
             val = kpis.get(key, 0) if kpis else 0
@@ -292,6 +304,7 @@ class HRDashboard(QScrollArea):
         self._refresh_absence()
         self._refresh_tasks()
         self._refresh_completeness()
+        self._refresh_validations()
         self._relayout_kpis()
 
     def _clear_layout(self, layout):
@@ -310,7 +323,7 @@ class HRDashboard(QScrollArea):
         cl = self._svc_section.content_layout()
         self._clear_layout(cl)
 
-        services = BladoDatabase.get_headcount_by_service()
+        services = BladoDatabase.get_headcount_by_service(self._ent_id)
         if not services:
             empty = QLabel("Aucune donnée")
             empty.setStyleSheet(f"color: {theme_manager.palette.text_soft}; "
@@ -323,7 +336,7 @@ class HRDashboard(QScrollArea):
             cl.addWidget(HBarCell(c["label"], c["count"], total, c.get("color", "")))
 
     def _refresh_contracts(self):
-        contracts = BladoDatabase.get_contracts_by_type()
+        contracts = BladoDatabase.get_contracts_by_type(self._ent_id)
         if not contracts:
             self._contract_ring.set_segments([], "")
             return
@@ -337,7 +350,7 @@ class HRDashboard(QScrollArea):
         self._contract_ring.set_segments(segments, f"{sum(c['count'] for c in contracts)} contrats")
 
     def _refresh_absence(self):
-        absence = BladoDatabase.get_absence_rate_30d()
+        absence = BladoDatabase.get_absence_rate_30d(self._ent_id)
         if absence:
             self._absence_stat.set_data(
                 f"{absence.get('rate', 0)}%  ·  {absence.get('total_events', 0)} événements",
@@ -345,7 +358,7 @@ class HRDashboard(QScrollArea):
                 absence.get("delta", 0))
 
     def _refresh_tasks(self):
-        overdue = BladoDatabase.get_overdue_tasks()
+        overdue = BladoDatabase.get_overdue_tasks(self._ent_id)
         if overdue > 0:
             self._tasks_alert.set_data("error",
                 f"{overdue} tâche(s) en retard — échéance dépassée", overdue)
@@ -354,21 +367,45 @@ class HRDashboard(QScrollArea):
 
     def _refresh_completeness(self):
         try:
-            completeness = BladoDatabase.get_completeness_stats()
+            completeness = BladoDatabase.get_completeness_stats(self._ent_id)
             self._cmp_pct.set_value(f"{completeness['pct']}%")
             self._cmp_miss.set_value(str(completeness['incomplete']))
-            self._cmp_id.set_value(str(BladoDatabase.get_expiring_id_docs()))
-            self._cmp_trial.set_value(str(BladoDatabase.get_trial_periods_ending()))
+            self._cmp_id.set_value(str(BladoDatabase.get_expiring_id_docs(self._ent_id)))
+            self._cmp_trial.set_value(str(BladoDatabase.get_trial_periods_ending(self._ent_id)))
 
             self._clear_layout(self._missing_bars_layout)
-            for m in BladoDatabase.get_missing_fields_stats():
+            for m in BladoDatabase.get_missing_fields_stats(self._ent_id):
                 self._missing_bars_layout.addWidget(
-                    HBarCell(m['label'], m['missing'], completeness['total'], theme_manager.palette.error))
+                    HBarCell(m['label'], m['missing'], completeness['total'],
+                             theme_manager.palette.tertiary))   # prune doux — pas de rouge agressif
 
             self._clear_layout(self._docs_bars_layout)
-            for d in BladoDatabase.get_missing_docs_stats():
+            for d in BladoDatabase.get_missing_docs_stats(self._ent_id):
                 self._docs_bars_layout.addWidget(
-                    HBarCell(d['label'], d['missing'], completeness['total'], theme_manager.palette.tertiary))
+                    HBarCell(d['label'], d['missing'], completeness['total'],
+                             theme_manager.palette.secondary))   # bleu ardoise
+        except RuntimeError:
+            pass  # widget déjà détruit — normal pendant un redraw rapide
+
+    def _refresh_validations(self):
+        """Dossiers actifs avec des items non « Vérifiés et Validés » — et lesquels."""
+        try:
+            self._clear_layout(self._validation_rows_layout)
+            pend = BladoDatabase.get_pending_validations(self._ent_id)
+            if not pend:
+                empty = QLabel("Tous les dossiers sont vérifiés et validés ✓")
+                empty.setStyleSheet(
+                    f"color: {theme_manager.palette.success}; "
+                    f"font-size: {theme_manager.font_size(ds.font_small)}px; border: none;")
+                self._validation_rows_layout.addWidget(empty)
+                return
+            for d in pend:
+                row = QLabel(f"• {d['full_name']} — non validé : {', '.join(d['pending'])}")
+                row.setWordWrap(True)
+                row.setStyleSheet(
+                    f"color: {theme_manager.palette.error}; "
+                    f"font-size: {theme_manager.font_size(ds.font_small)}px; border: none;")
+                self._validation_rows_layout.addWidget(row)
         except RuntimeError:
             pass  # widget déjà détruit — normal pendant un redraw rapide
 

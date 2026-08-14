@@ -43,7 +43,15 @@ class M3ColorScheme:
         self._scheme = self._build()
     def get_hex(self, color_name: str) -> str:
         dc = getattr(self._mdc, color_name, None)
-        return dc.get_hex(self._scheme) if dc else "#000000"
+        if not dc:
+            return "#000000"
+        hexv = dc.get_hex(self._scheme)
+        # materialyoucolor renvoie "#RRGGBBAA" (alpha en dernier), mais Qt QSS
+        # attend "#AARRGGBB" (alpha en premier). Un 8-chiffres RRGGBBAA est donc
+        # mal interprété : le premier octet devient l'OPACITÉ (ex. #2F323AFF →
+        # alpha 18 %, texte bleu translucide illisible sur les dialogues).
+        # Les couleurs étant opaques, on renvoie le 6-chiffres #RRGGBB.
+        return hexv[:7] if len(hexv) >= 7 else hexv
     def get_argb(self, color_name: str) -> int:
         dc = getattr(self._mdc, color_name, None)
         return dc.get_argb(self._scheme) if dc else 0

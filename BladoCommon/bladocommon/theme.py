@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Optional
 
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QPalette
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Signal, QObject
 
@@ -106,7 +106,7 @@ class Palette:
     outline_variant: str = "#B0BEC5"
     text_strong: str = "#1B1B1F"
     text_soft: str = "#455A64"
-    text_disabled: str = "#90A4AE"
+    text_disabled: str = "#6B7280"
     success: str = "#2E7D32"
     active: str = "#1565C0"
     inactive: str = "#90A4AE"
@@ -154,7 +154,7 @@ _THEME_PALETTES = {
         outline_variant="#C4C6CF",
         text_strong="#191C20",
         text_soft="#43474E",
-        text_disabled="#93969C",
+        text_disabled="#6B7280",
         active="#1565C0",
         inactive="#93969C",
         border="#C4C6CF",
@@ -181,7 +181,7 @@ _THEME_PALETTES = {
         outline_variant="#424242",
         text_strong="#E0E0E0",
         text_soft="#9E9E9E",
-        text_disabled="#616161",
+        text_disabled="#8A8A8A",
         active="#64B5F6",
         inactive="#616161",
         border="#424242",
@@ -208,7 +208,7 @@ _THEME_PALETTES = {
         outline_variant="#E0E0E0",
         text_strong="#212121",
         text_soft="#616161",
-        text_disabled="#9E9E9E",
+        text_disabled="#6B7280",
         active="#37474F",
         inactive="#BDBDBD",
         border="#E0E0E0",
@@ -368,6 +368,7 @@ class ThemeManager(QObject):
             self._theme = self._themes[name]
             self._phi_theme = None
             self._sync_phibuilder()
+            self._apply_palette()
             self._reapply()
             self.theme_changed.emit()
             return True
@@ -381,11 +382,45 @@ class ThemeManager(QObject):
 
     def bind(self, app: QApplication) -> None:
         self._app = app
+        # Fusion : rendu identique sur toutes les machines (le style natif
+        # Windows peint certains widgets — ex. QDateEdit — avec des couleurs
+        # système hors thème, bleu illisible sur fond clair).
+        app.setStyle("Fusion")
         self._phibuilder = PhiBuilder(
             seed_color=_SEED_MAP.get(self._active, "#1565C0"),
             is_dark=_IS_DARK_MAP.get(self._active, False),
         )
+        self._apply_palette()
         self._reapply()
+
+    def _apply_palette(self):
+        """Aligne la palette Qt sur la palette Blado (sections QDateEdit, calendrier,
+        sélections, ET dialogues natifs : QMessageBox/QDialog sans WA_StyledBackground
+        ne peignent pas le QSS de fond et retombent sur QPalette.Window — gris Fusion
+        illisible en thème dark)."""
+        if self._app is None:
+            return
+        pal = self._app.palette()
+        p = self.palette
+        pal.setColor(QPalette.Text, p.text_strong)
+        pal.setColor(QPalette.ButtonText, p.text_strong)
+        pal.setColor(QPalette.WindowText, p.text_strong)
+        # Marqueur de section des QDateEdit : bande sombre + texte blanc
+        # (le défaut était un bleu vif sur fond clair, illisible).
+        pal.setColor(QPalette.Highlight, p.text_strong)
+        pal.setColor(QPalette.HighlightedText, p.on_primary)
+        # Fond des fenêtres natives (QMessageBox, QDialog « plain ») —
+        # sans ces rôles, le fond reste le gris Fusion par défaut.
+        pal.setColor(QPalette.Window, p.surface)
+        pal.setColor(QPalette.Base, p.surface)
+        pal.setColor(QPalette.AlternateBase, p.surface_variant)
+        pal.setColor(QPalette.Button, p.surface_variant)
+        pal.setColor(QPalette.ToolTipBase, p.surface_variant)
+        pal.setColor(QPalette.ToolTipText, p.text_strong)
+        pal.setColor(QPalette.PlaceholderText, p.text_soft)
+        pal.setColor(QPalette.Link, p.primary)
+        pal.setColor(QPalette.LinkVisited, p.primary)
+        self._app.setPalette(pal)
 
     def _sync_phibuilder(self):
         if self._phibuilder is None:
@@ -413,6 +448,15 @@ class ThemeManager(QObject):
                 background: {p.surface_variant}; color: {p.text_strong};
                 border: 1px solid {p.outline}; padding: {_ds.space_xxs}px;  /* 4px Fibo padding */
                 font-size: {s(f.small)}px;
+            }}
+            QMessageBox, QDialog {{
+                background-color: {p.surface};
+            }}
+            QMessageBox QLabel {{
+                color: {p.text_strong}; background: transparent;
+            }}
+            QDialogButtonBox QPushButton {{
+                height: {_ds.field_height}px; padding: 0 {_ds.space_md}px;
             }}
             QMenu {{
                 background: {p.surface}; color: {p.text_strong};

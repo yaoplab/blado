@@ -83,7 +83,7 @@ class ContractFormDialog(ThemedDialog):
         layout.addWidget(self._f_trial)
 
         self._f_trial_end = QLabel("Fin période d'essai : —")
-        self._f_trial_end.setStyleSheet(f"color: {p.text_soft}; font-size: {s(11)}px; border: none;")
+        self._f_trial_end.setStyleSheet(f"color: {p.text_soft}; font-size: {s(12)}px; border: none;")
         layout.addWidget(self._f_trial_end)
 
         # Salary + hours

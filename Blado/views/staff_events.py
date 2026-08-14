@@ -17,6 +17,7 @@ from bladocommon.theme import theme_manager
 from bladocommon.safe_slot import safe_slot
 from bladocommon.widgets.themed_widget import ThemedDialog
 from phibuilder.phi.scale import SpacingToken
+from Blado.common.blado_database import BladoDatabase
 
 
 class StaffEventDialog(ThemedDialog):
@@ -28,14 +29,17 @@ class StaffEventDialog(ThemedDialog):
         ("Retard", "Re"),
     ]
 
-    def __init__(self, staff_data: dict, parent=None):
+    def __init__(self, staff_data: dict | None, parent=None):
         super().__init__(parent)
+        # staff_data None = événement générique (bouton « + Ajouter » de la
+        # page Absences) → un sélecteur d'employé est affiché dans le dialogue
         self._staff = staff_data
         self._selected_type: str | None = None
         self._mode_buttons: dict[str, QPushButton] = {}
+        self._staff_combo: QComboBox | None = None
 
-        name = staff_data.get("full_name", "—")
-        self.setWindowTitle(f"Événement — {name}")
+        name = (staff_data or {}).get("full_name", "")
+        self.setWindowTitle(f"Événement — {name}" if name else "Nouvel événement")
         _w = ds.sidebar_width + ds.golden_width(ds.sidebar_width)
         self.setMinimumSize(_w, 560)
         self._setup_ui()
@@ -104,10 +108,25 @@ class StaffEventDialog(ThemedDialog):
         layout.setSpacing(ds.space_md)
 
         # ── Header ──
-        header = QLabel(f"Événement — {self._staff.get('full_name', '—')}")
+        header = QLabel(f"Événement — {(self._staff or {}).get('full_name', '')}")
         header.setStyleSheet(
             f"font-size: {s(16)}px; font-weight: bold; color: {p.text_strong}; border: none;")
         layout.addWidget(header)
+
+        # ── Employé (uniquement en mode générique, sans employé présélectionné) ──
+        if self._staff is None:
+            lbl_staff = QLabel("Employé")
+            lbl_staff.setStyleSheet(
+                f"font-size: {s(ds.font_label_sm)}px; color: {p.text_soft}; "
+                f"font-weight: bold; border: none;")
+            layout.addWidget(lbl_staff)
+            self._staff_combo = QComboBox()
+            self._staff_combo.setFixedHeight(ds.field_height)
+            self._staff_combo.setStyleSheet(ds.flat_input_qss())
+            for st in BladoDatabase.search_staff(0, 0, False, "", {}):
+                self._staff_combo.addItem(
+                    f"{st.get('full_name', '—')} (ID {st.get('id', '')})", st.get("id"))
+            layout.addWidget(self._staff_combo)
 
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
@@ -280,19 +299,31 @@ class StaffEventDialog(ThemedDialog):
         motif = self._motif_field.currentText().strip() or self._motif_field.currentText()
         event_label = f"{'Absence' if self._selected_type == 'Ab' else 'Retard'} — {motif}"
 
+        staff_id = self._staff["id"] if self._staff else \
+            (self._staff_combo.currentData() if self._staff_combo else None)
+        if not staff_id:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Champ obligatoire",
+                              "Veuillez sélectionner un employé.")
+            return
+
         try:
             cur = conn.cursor()
+            # created_by référence blado_employee — l'utilisateur connecté
+            # (blado_user) n'y correspond pas forcément → NULL sinon FK violée
+            cur.execute("SELECT 1 FROM blado_employee WHERE id = %s", (session.user_id,))
+            created_by = session.user_id if cur.fetchone() else None
             cur.execute("""
                 INSERT INTO blado_event (staff_id, event_type, event_at,
                     note, source, created_by)
                 VALUES (%s, %s, %s, %s, %s, %s)
             """, (
-                self._staff["id"],
+                staff_id,
                 event_label,
                 self._date_edit.dateTime().toPython(),
                 self._note.toPlainText().strip() or None,
                 "RH",
-                session.user_id,
+                created_by,
             ))
             self.event_saved.emit()
             self.accept()
@@ -308,7 +339,9 @@ class StaffEventDialog(ThemedDialog):
 def open_staff_event_generator(staff_data: dict, parent=None):
     dlg = StaffEventDialog(staff_data, parent)
     dlg.event_saved.connect(lambda: _refresh_parent_grid(parent))
-    dlg.exec()
+    if dlg.exec():
+        from PySide6.QtWidgets import QMessageBox
+        QMessageBox.information(parent, "Blado", "Événement enregistré.")
 
 
 def _refresh_parent_grid(widget):

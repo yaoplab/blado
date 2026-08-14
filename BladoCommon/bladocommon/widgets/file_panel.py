@@ -124,6 +124,7 @@ class FilePanel(QWidget):
             return
         path = os.path.join(self._directory, item.text())
         dlg = FileViewer(path, self)
+        # no-popup-feedback : simple visionneuse, aucune action
         dlg.exec()
 
     @safe_slot("FilePanel._open_folder")

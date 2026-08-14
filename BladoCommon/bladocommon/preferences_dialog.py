@@ -6,6 +6,7 @@ Gère : thème, langue, taille des vignettes.
 from bladocommon.design_system import ds
 from bladocommon.l10n import Translator, _
 from phibuilder.widgets import M3Button, M3Dialog, M3Frame, M3Label
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QButtonGroup,
     QHBoxLayout,

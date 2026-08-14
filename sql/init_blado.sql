@@ -305,6 +305,19 @@ CREATE TABLE IF NOT EXISTS blado_language (
 );
 
 -- ============================================================================
+-- 10b. BLADO_DOSSIER_CHECK — validation « Vérifié et Validé » des données du dossier
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS blado_dossier_check (
+    id              SERIAL PRIMARY KEY,
+    staff_id        INTEGER NOT NULL REFERENCES blado_employee(id) ON DELETE CASCADE,
+    item_key        VARCHAR(40) NOT NULL,   -- matricule, cnss, piece_identite, urgence_nom, urgence_tel, contrat
+    validated       BOOLEAN NOT NULL DEFAULT FALSE,
+    validated_by    VARCHAR(150),
+    validated_at    TIMESTAMP,
+    UNIQUE (staff_id, item_key)
+);
+
+-- ============================================================================
 -- 11. BLADO_DETAIL_CATEGORY — catégories d'onglets dans la fiche employé
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS blado_detail_category (
@@ -323,13 +336,13 @@ CREATE TABLE IF NOT EXISTS blado_detail_category (
 CREATE TABLE IF NOT EXISTS blado_document (
     id              SERIAL PRIMARY KEY,
     staff_id        INTEGER NOT NULL REFERENCES blado_employee(id) ON DELETE CASCADE,
-    category_key    VARCHAR(50),
-    file_name       VARCHAR(255),
+    label           VARCHAR(255),
+    description     TEXT,
     file_path       TEXT,
+    url             TEXT,
     file_size       BIGINT,
     uploaded_at     TIMESTAMP DEFAULT NOW(),
-    uploaded_by     INTEGER REFERENCES blado_employee(id),
-    UNIQUE(staff_id, category_key, file_name)
+    UNIQUE(staff_id, label)
 );
 
 -- ============================================================================
@@ -338,7 +351,7 @@ CREATE TABLE IF NOT EXISTS blado_document (
 CREATE TABLE IF NOT EXISTS blado_letter_template (
     id              SERIAL PRIMARY KEY,
     family          CHAR(1),               -- A–J
-    code            VARCHAR(8),
+    code            VARCHAR(16),            -- ex. "AEC-STDA01" (préfixe société + code standard)
     title           VARCHAR(200),
     description     TEXT,
     body_text       TEXT,
@@ -348,7 +361,10 @@ CREATE TABLE IF NOT EXISTS blado_letter_template (
     is_active       BOOLEAN DEFAULT TRUE,
     is_builtin      BOOLEAN DEFAULT TRUE,  -- TRUE = fourni, FALSE = personnalisé
     fk_entreprise_id INTEGER REFERENCES entreprises(id) ON DELETE CASCADE,  -- NULL = global
-    created_at      TIMESTAMP DEFAULT NOW()
+    created_at      TIMESTAMP DEFAULT NOW(),
+    updated_at      TIMESTAMP DEFAULT NOW(),
+    source_code     VARCHAR(8),            -- code du modèle standard d'origine
+    created_by      INTEGER                -- utilisateur blado_user ayant créé le modèle
 );
 
 CREATE TABLE IF NOT EXISTS blado_generated_letter (

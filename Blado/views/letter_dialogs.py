@@ -2,20 +2,42 @@
 # BLADO: fichier ≤ 1000 lignes (règle pyside6-wrapper)
 
 from __future__ import annotations
-from PySide6.QtCore import Qt
+from datetime import date
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QDialog, QScrollArea, QFrame, QLineEdit, QTextEdit,
     QComboBox, QMessageBox, QFileDialog,
+    QListWidget, QListWidgetItem,
 )
 from bladocommon.database import db
 from bladocommon.design_system import ds
 from bladocommon.theme import theme_manager
 from bladocommon.icons import icon as md3_icon
 from bladocommon.safe_slot import safe_slot
+from bladocommon.session import session
 from bladocommon.widgets.themed_widget import ThemedDialog
+from phibuilder.phi.scale import SpacingToken
 from Blado.common.blado_database import BladoDatabase
-from Blado.views import letter_templates
+from Blado.views.letter_templates import (
+    build as build_letter,
+    render_body, generate_docx, PLACEHOLDER_STAFF,
+)
+
+# Familles de courriers (partagé avec LetterManager)
+FAMILIES = [
+    ("A", "Contrat et emploi"),
+    ("B", "Rémunération"),
+    ("C", "Discipline"),
+    ("D", "Congés (RH)"),
+    ("E", "Fin de contrat"),
+    ("F", "Vie professionnelle"),
+    ("G", "Recrutement"),
+    ("H", "Demandes employé"),
+    ("I", "Spécifique IB"),
+    ("J", "Syndical"),
+]
+
 class _GenerateLetterDialog(ThemedDialog):
 
     def __init__(self, template: dict, staff_data: dict | None = None,
@@ -174,6 +196,7 @@ class _GenerateLetterDialog(ThemedDialog):
                 import traceback; traceback.print_exc()
                 QMessageBox.warning(self, "Erreur", f"Erreur :\n{exc}")
                 return
+        self._output_path = fpath
         if self._staff:
             BladoDatabase.save_generated_letter(
                 self._staff["id"], self._template["id"], fpath,
@@ -221,7 +244,7 @@ class _CatalogDialog(ThemedDialog):
 
         # ── Sidebar familles ──
         sidebar = QWidget()
-        sidebar.setFixedWidth(170)
+        sidebar.setFixedWidth(ds.space_xxxl * 2)
         sidebar.setStyleSheet(f"background: {p.surface_variant}; border-right: 1px solid {p.outline_variant};")
         sl = QVBoxLayout(sidebar)
         sl.setContentsMargins(ds.space_xs, ds.space_sm, ds.space_xs, ds.space_sm)
@@ -238,7 +261,7 @@ class _CatalogDialog(ThemedDialog):
                 QPushButton {{ text-align: left; padding: {ds.space_xxs}px {ds.space_xs}px;
                 border: none; border-radius: {ds.radius_xs}px; color: {p.text_strong};
                 font-size: {s(12)}px; background: transparent; }}
-                QPushButton:checked {{ background: {p.primary_container}; color: {p.primary}; font-weight: bold; }}
+                QPushButton:checked {{ background: {p.primary_container}; color: {p.text_strong}; font-weight: bold; }}
                 QPushButton:hover {{ background: {p.surface}; }}
             """)
             btn.clicked.connect(lambda checked, k=fam_key: self._switch(k))
@@ -293,9 +316,9 @@ class _CatalogDialog(ThemedDialog):
 
         # Header aperçu
         self._pv_code = QLabel("")
-        self._pv_code.setFixedWidth(50)
+        self._pv_code.setFixedWidth(ds.button_height)
         self._pv_code.setAlignment(Qt.AlignCenter)
-        self._pv_code.setStyleSheet(f"font-size: {s(10)}px; font-weight: bold; color: {p.primary}; "
+        self._pv_code.setStyleSheet(f"font-size: {s(10)}px; font-weight: bold; color: {p.text_strong}; "
                                      f"background: {p.primary_container}; border-radius: {ds.radius_xs}px; "
                                      f"padding: 2px 6px; border: none;")
         pv_hdr = QHBoxLayout()
@@ -312,7 +335,7 @@ class _CatalogDialog(ThemedDialog):
         self._pv_body.setStyleSheet(f"""
             QTextEdit {{ background: {p.surface}; border: 1px solid {p.outline_variant};
             border-radius: {ds.radius_xs}px; padding: {ds.space_xs}px;
-            color: {p.text_strong}; font-size: {s(11)}px; }}
+            color: {p.text_strong}; font-size: {s(12)}px; }}
         """)
         pv.addWidget(self._pv_body, 1)
 
@@ -332,7 +355,7 @@ class _CatalogDialog(ThemedDialog):
             border-radius: {ds.radius_sm}px; padding: {ds.space_xs}px {ds.space_md}px;
             font-size: {s(13)}px; font-weight: bold; }}
             QPushButton:hover {{ background: {p.primary}; }}
-            QPushButton:disabled {{ background: {p.outline_variant}; color: {p.text_disabled}; }}
+            QPushButton:disabled {{ background: {p.surface_variant}; color: {p.text_soft}; }}
         """)
         self._confirm_btn.clicked.connect(self._on_confirm)
         self._confirm_btn.setEnabled(False)
@@ -389,9 +412,9 @@ class _CatalogDialog(ThemedDialog):
 
             r1 = QHBoxLayout()
             code_lbl = QLabel(tpl.get("code", ""))
-            code_lbl.setFixedWidth(40)
+            code_lbl.setFixedWidth(ds.space_lg + ds.space_xs)
             code_lbl.setAlignment(Qt.AlignCenter)
-            code_lbl.setStyleSheet(f"font-size: {s(11)}px; font-weight: bold; color: {p.primary}; "
+            code_lbl.setStyleSheet(f"font-size: {s(12)}px; font-weight: bold; color: {p.text_strong}; "
                                     f"background: {p.primary_container}; border-radius: {ds.radius_xs}px; "
                                     f"padding: 2px 6px; border: none;")
             r1.addWidget(code_lbl)
@@ -404,7 +427,7 @@ class _CatalogDialog(ThemedDialog):
             if desc:
                 d = QLabel(desc)
                 d.setWordWrap(True)
-                d.setStyleSheet(f"font-size: {s(11)}px; color: {p.text_soft}; border: none; padding-left: 52px;")
+                d.setStyleSheet(f"font-size: {s(12)}px; color: {p.text_soft}; border: none; padding-left: {ds.button_height}px;")
                 crd.addWidget(d)
 
             # Clic sur la carte → aperçu
@@ -503,7 +526,7 @@ class _EditTemplateDialog(ThemedDialog):
         layout.addWidget(QLabel("Description :"))
         self._desc_edit = QTextEdit()
         self._desc_edit.setPlainText(self._template.get("description", ""))
-        self._desc_edit.setFixedHeight(80)
+        self._desc_edit.setFixedHeight(ds.field_height * 2 + ds.space_xs)
         self._desc_edit.setStyleSheet(f"""
             QTextEdit {{ background: {p.background}; border: 1px solid {p.outline};
             border-radius: {ds.radius_xs}px; padding: {ds.space_xs}px;
@@ -542,8 +565,8 @@ class _EditTemplateDialog(ThemedDialog):
         restore_btn.setStyleSheet(f"""
             QPushButton {{ background: transparent; color: {p.text_soft};
             border: 1px solid {p.outline}; border-radius: {ds.radius_xs}px;
-            padding: 2px {ds.space_xs}px; font-size: {s(11)}px; }}
-            QPushButton:hover {{ background: {p.surface_variant}; color: {p.primary}; }}
+            padding: 2px {ds.space_xs}px; font-size: {s(12)}px; }}
+            QPushButton:hover {{ background: {p.surface_variant}; color: {p.text_strong}; }}
         """)
         restore_btn.clicked.connect(self._on_restore)
         layout.addWidget(restore_btn)
@@ -614,7 +637,7 @@ class _StaffSearchPopup(QFrame):
         self.setMinimumWidth(350)
         self.setMaximumHeight(300)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setContentsMargins(ds.space_xxs, ds.space_xxs, ds.space_xxs, ds.space_xxs)
         self._list = QListWidget()
         self._list.setFrameShape(QListWidget.NoFrame)
         self._list.itemClicked.connect(self._on_item_clicked)

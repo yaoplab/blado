@@ -6,6 +6,7 @@ from PySide6.QtGui import QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
     QScrollArea, QStackedWidget, QSizePolicy, QApplication,
+    QMessageBox,
 )
 
 from bladocommon.database import db
@@ -135,7 +136,7 @@ class MainWindow(QWidget):
         self._role_label = QLabel("Ressources Humaines")
         self._role_label.setAlignment(Qt.AlignCenter)
         self._role_label.setStyleSheet(f"""
-            font-size: {theme_manager.font_size(10)}px;
+            font-size: {theme_manager.font_size(12)}px;
             color: {theme_manager.palette.text_strong};
             padding: 0 5px;
         """)
@@ -164,12 +165,12 @@ class MainWindow(QWidget):
         for key, label, _lo, _hi, icon_name in CATEGORIES:
             btn = _CategoryButton(key, label, icon_name)
             btn.setStyleSheet(f"""
-                QPushButton {{ text-align: left; font-size: {_siz(11)}px;
+                QPushButton {{ text-align: center; font-size: {_siz(12)}px;
                 color: {_pal.text_strong}; background: transparent;
                 border: none; border-radius: {ds.radius_xs}px;
                 padding: {ds.space_xxs}px {ds.space_xs}px; }}
                 QPushButton:checked {{ background: {_pal.primary_container};
-                color: {_pal.primary}; font-weight: bold; }}
+                color: {_pal.text_strong}; font-weight: bold; }}
                 QPushButton:hover {{ background: {_pal.surface}; }}
             """)
             btn.clicked.connect(lambda checked, k=key: self._switch_to(k))
@@ -178,14 +179,16 @@ class MainWindow(QWidget):
 
         sb_layout.addStretch()
 
-        # À propos
+        # À propos — même taille que les menus, tout en bas au-dessus du ©
         about_btn = QPushButton("À propos")
         about_btn.setCursor(Qt.PointingHandCursor)
+        about_btn.setFixedHeight(theme_manager.image.theme_btn)
         about_btn.setStyleSheet(f"""
-            QPushButton {{ text-align: center; font-size: {_siz(10)}px;
+            QPushButton {{ text-align: center; font-size: {_siz(12)}px;
             color: {_pal.text_soft}; background: transparent;
-            border: none; padding: {ds.space_xxs}px; }}
-            QPushButton:hover {{ color: {_pal.primary}; }}
+            border: none; border-radius: {ds.radius_xs}px;
+            padding: {ds.space_xxs}px {ds.space_xs}px; }}
+            QPushButton:hover {{ background: {_pal.surface}; color: {_pal.text_strong}; }}
         """)
         about_btn.clicked.connect(self._show_about)
         sb_layout.addWidget(about_btn)
@@ -210,9 +213,19 @@ class MainWindow(QWidget):
         cl.setContentsMargins(0, 0, 0, 0)
         cl.setSpacing(0)
 
-        self._topbar = TopBar()
+        self._topbar = TopBar(show_entreprise=True)
         self._topbar.logout_requested.connect(QApplication.quit)
         self._topbar.theme_changed.connect(self._on_topbar_theme)
+        self._topbar.entreprise_changed.connect(self._on_entreprise_changed)
+        # BLADO multi-clients : sélecteur visible en mode consultant, client
+        # par défaut = première entreprise active
+        from Blado.common.blado_database import BladoDatabase
+        ent_items = [(e["nom"], e["id"]) for e in BladoDatabase.get_entreprises()]
+        self._topbar.set_entreprises(ent_items)
+        self._topbar.set_entreprise_visible(session.mode == "consultant")
+        if session.mode == "consultant" and ent_items:
+            session.entreprise_id = ent_items[0][1]
+            self._topbar.select_entreprise(session.entreprise_id)
         cl.addWidget(self._topbar)
 
         # Header
@@ -309,6 +322,9 @@ class MainWindow(QWidget):
             elif key == 'payroll':
                 from Blado.views.payslip_list import PayslipListPage
                 page = PayslipListPage()
+            elif key == 'payslip_run':
+                from Blado.views.payslip_run import PayslipRunPage
+                page = PayslipRunPage()
             elif key == 'letters':
                 from Blado.views.letter_manager import LetterManager
                 page = LetterManager()
@@ -318,11 +334,8 @@ class MainWindow(QWidget):
                 from Blado.views.absence_planner import AbsencePlanner
                 page = AbsencePlanner()
             elif key == 'settings':
-                # BLADO: settings_dialog pas encore implémenté
-                from PySide6.QtWidgets import QLabel
-                page = QLabel("Paramètres — à venir")
-                page.setAlignment(Qt.AlignCenter)
-                page.setStyleSheet(f"color:{theme_manager.palette.text_soft};font-size:{ds.font_title}px;")
+                from Blado.views.settings_page import SettingsPage
+                page = SettingsPage()
             elif key == 'missions':
                 from Blado.views.mission_dialog import MissionPage
                 page = MissionPage()
@@ -363,6 +376,10 @@ class MainWindow(QWidget):
                 w.deleteLater()
         if self._current_key and self._current_key in self._pages:
             self._stack.setCurrentWidget(self._pages[self._current_key])
+            # Rafraîchir la page restaurée (photo/modifs faites dans la fiche)
+            page = self._pages[self._current_key]
+            if hasattr(page, "refresh"):
+                page.refresh()
 
     def _make_todo_page(self):
         from bladocommon.widgets.todo_kanban import TodoKanban
@@ -418,6 +435,7 @@ class MainWindow(QWidget):
         dlg = StaffFormDialog(0, 0, slot_id=slot_id, parent=self)
         if dlg.exec():
             self._load_counts()
+            QMessageBox.information(self, "Blado", "Employé enregistré.")
             if self._current_key in self._pages:
                 page = self._pages[self._current_key]
                 if hasattr(page, 'refresh'):
@@ -473,6 +491,7 @@ class MainWindow(QWidget):
                                f"border:none;border-radius:{ds.radius_sm}px;"
                                f"padding:{ds.space_xs}px {ds.space_md}px;")
         layout.addWidget(close_btn, 0, Qt.AlignCenter)
+        # no-popup-feedback : dialogue purement informatif (À propos)
         dlg.exec()
 
     @safe_slot("MainWindow._restyle")
@@ -481,6 +500,16 @@ class MainWindow(QWidget):
         theme_manager.set_active(key)
         session.theme_pref = key
         self._restyle()
+
+    @safe_slot("MainWindow._on_entreprise_changed")
+    def _on_entreprise_changed(self, eid: int):
+        # BLADO multi-clients : le client actif pilote paie, missions,
+        # dashboard, absences et courriers (0 = toutes les entreprises)
+        session.entreprise_id = eid or 0
+        if self._current_key and self._current_key in self._pages:
+            page = self._pages[self._current_key]
+            if hasattr(page, "refresh"):
+                page.refresh()
 
     def _restyle(self):
         p = theme_manager.palette
@@ -506,10 +535,11 @@ class MainWindow(QWidget):
             """)
             self._sidebar_sep.setStyleSheet(f"background-color: {p.border};")
             self._about_btn.setStyleSheet(f"""
-                QPushButton {{ text-align: center; font-size: {s(10)}px;
+                QPushButton {{ text-align: center; font-size: {s(12)}px;
                 color: {p.text_soft}; background: transparent;
-                border: none; padding: {ds.space_xxs}px; }}
-                QPushButton:hover {{ color: {p.primary}; }}
+                border: none; border-radius: {ds.radius_xs}px;
+                padding: {ds.space_xxs}px {ds.space_xs}px; }}
+                QPushButton:hover {{ background: {p.surface}; color: {p.text_strong}; }}
             """)
             self._copy_lbl.setStyleSheet(
                 f"font-size: {s(9)}px; color: {p.text_soft}; "
@@ -529,12 +559,12 @@ class MainWindow(QWidget):
             # Boutons de catégorie — QSS complet
             for btn in self._buttons.values():
                 btn.setStyleSheet(f"""
-                    QPushButton {{ text-align: left; font-size: {s(11)}px;
+                    QPushButton {{ text-align: center; font-size: {s(12)}px;
                     color: {p.text_strong}; background: transparent;
                     border: none; border-radius: {ds.radius_xs}px;
                     padding: {ds.space_xxs}px {ds.space_xs}px; }}
                     QPushButton:checked {{ background: {p.primary_container};
-                    color: {p.primary}; font-weight: bold; }}
+                    color: {p.text_strong}; font-weight: bold; }}
                     QPushButton:hover {{ background: {p.surface}; }}
                 """)
                 btn._restyle_icon()

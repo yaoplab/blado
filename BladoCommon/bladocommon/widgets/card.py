@@ -84,7 +84,7 @@ class StudentCard(QFrame):
         _badge_size = 14
         _badge_font = f"font-size: {max(7, _badge_size - 7)}px; font-weight: bold;"
         self._badges_row = QHBoxLayout()
-        self._badges_row.setSpacing(2)
+        self._badges_row.setSpacing(ds.space_xxs)
         self._badges_row.setContentsMargins(0, 0, 0, 0)
         for badge_key, letter in [
             ("dossier_valid", "D"), ("parent_valid", "M"),

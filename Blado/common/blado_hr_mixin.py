@@ -7,6 +7,18 @@ from typing import Any
 from datetime import date, datetime
 from bladocommon.database import db
 
+
+def _ent_filter(emp: str = "a", srv: str = "s") -> str:
+    """BLADO multi-clients : fragment WHERE commun — un employé est rattaché à
+    son client directement (fk_entreprise_id) ou via son service
+    (services.entreprise_id) quand la colonne n'est pas encore remplie."""
+    return (f"({emp}.fk_entreprise_id = %s OR "
+            f"({emp}.fk_entreprise_id IS NULL AND {srv}.entreprise_id = %s))")
+
+
+# Alias a/s par défaut (le plus courant)
+ENT_FILTER_SQL = _ent_filter()
+
 class BladoHRMixin:
 
     # ========================================================================
@@ -22,13 +34,16 @@ class BladoHRMixin:
         cur = conn.cursor()
         cur.execute("""
             SELECT s.id, s.label, s.code, s.color, s.description, s.sort_order, s.enabled,
+                   s.entreprise_id, ent.nom AS entreprise_nom,
                    COUNT(e.id) FILTER (WHERE e.is_active = TRUE) AS active_count,
                    COUNT(e.id) AS total_slots
             FROM services s
+            LEFT JOIN entreprises ent ON ent.id = s.entreprise_id
             LEFT JOIN blado_employee e ON e.fk_service_id = s.id
-            GROUP BY s.id ORDER BY s.id
+            GROUP BY s.id, ent.nom ORDER BY s.id
         """)
         cols = ["id", "label", "code", "color", "description", "sort_order", "enabled",
+                "entreprise_id", "entreprise_nom",
                 "active_count", "total_slots"]
         return [dict(zip(cols, r)) for r in cur.fetchall()]
 
@@ -43,9 +58,16 @@ class BladoHRMixin:
             enabled = data.get("enabled", True)
             cur.execute(
                 "UPDATE services SET label=%s, code=%s, description=%s, color=%s, "
-                "enabled=%s WHERE id=%s",
+                "enabled=%s, entreprise_id=%s WHERE id=%s",
                 (data["label"], data.get("code", ""), data.get("description", ""),
-                 data.get("color", "white"), enabled, sid))
+                 data.get("color", "white"), enabled, data.get("entreprise_id"), sid))
+            # BLADO multi-clients : les employés actifs du service héritent du
+            # client qui vient d'être rattaché (fk_entreprise_id synchronisé).
+            cur.execute("""
+                UPDATE blado_employee SET fk_entreprise_id = %s, updated_at=NOW()
+                WHERE fk_service_id = %s AND is_active = TRUE
+                  AND (fk_entreprise_id IS NULL OR fk_entreprise_id <> %s)
+            """, (data.get("entreprise_id"), sid, data.get("entreprise_id")))
             return sid
         except Exception:
             return None
@@ -85,9 +107,13 @@ class BladoHRMixin:
         conn = db.server_conn
         if not conn: return []
         cur = conn.cursor()
+        # Seuls les EMPLACEMENTS (lignes placeholder 'Employe'/'Slot XXXXX') sont
+        # des slots libres. Un vrai employé désactivé ne doit JAMAIS être écrasé
+        # par une création (bug 2026-08-13 : 2 employés détruits).
         cur.execute("""
             SELECT id, first_name, last_name FROM blado_employee
             WHERE fk_service_id = %s AND is_active = FALSE
+              AND first_name IN ('Employe', 'Employé') AND last_name LIKE 'Slot %%'
             ORDER BY id LIMIT 50
         """, (service_id,))
         return [{"id": r[0], "first_name": r[1], "last_name": r[2]} for r in cur.fetchall()]
@@ -98,10 +124,16 @@ class BladoHRMixin:
         if not conn: return None
         try:
             cur = conn.cursor()
+            # Garde-fou : n'activer QUE des emplacements placeholder — jamais
+            # un vrai employé désactivé (risque d'écrasement de données).
             cur.execute("""
                 UPDATE blado_employee SET
                     first_name=%s, last_name=%s, email=%s, phone_mobile=%s,
                     fk_service_id=COALESCE(%s, fk_service_id),
+                    -- BLADO multi-clients : le client de l'employé suit son
+                    -- service (services.entreprise_id) — jamais mélangé entre clients
+                    fk_entreprise_id=(SELECT s.entreprise_id FROM services s
+                                      WHERE s.id = COALESCE(%s, fk_service_id)),
                     civility=%s, nationality=%s, marital_status=%s, children_count=%s,
                     emergency_contact_name=%s, emergency_contact_phone=%s,
                     blood_type=%s, cnss_number=%s, tax_id=%s,
@@ -110,8 +142,10 @@ class BladoHRMixin:
                     hire_date=%s, emp_status='actif',
                     is_active=TRUE, updated_at=NOW()
                 WHERE id=%s AND is_active=FALSE
+                  AND first_name IN ('Employe', 'Employé') AND last_name LIKE 'Slot %%'
             """, (data.get("first_name",""), data.get("last_name",""), data.get("email",""),
                   data.get("phone_mobile",""), data.get("fk_service_id"),
+                  data.get("fk_service_id"),
                   data.get("civility",""),
                   data.get("nationality",""), data.get("marital_status",""),
                   data.get("children_count",0),
@@ -141,24 +175,31 @@ class BladoHRMixin:
         except Exception:
             return None
     @staticmethod
-    def get_trial_periods_ending() -> int:
-        """Périodes d'essai se terminant dans les 15 jours."""
+    def get_trial_periods_ending(entreprise_id: int | None = None) -> int:
+        """Périodes d'essai se terminant dans les 15 jours (filtré par client)."""
         conn = db.server_conn
         if not conn: return 0
         try:
             cur = conn.cursor()
-            cur.execute("""
-                SELECT COUNT(*) FROM blado_contract
-                WHERE statut = 'actif' AND periode_essai_fin IS NOT NULL
-                  AND periode_essai_fin BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '15 days'
-            """)
+            query = """
+                SELECT COUNT(*) FROM blado_contract c
+                JOIN blado_employee a ON a.id = c.staff_id
+                LEFT JOIN services s ON s.id = a.fk_service_id
+                WHERE c.statut = 'actif' AND c.periode_essai_fin IS NOT NULL
+                  AND c.periode_essai_fin BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '15 days'
+            """
+            params: list[Any] = []
+            if entreprise_id:
+                query += f" AND {ENT_FILTER_SQL}"
+                params = [entreprise_id, entreprise_id]
+            cur.execute(query, params)
             return cur.fetchone()[0] or 0
         except Exception:
             return 0
 
     @staticmethod
-    def get_missing_fields_stats() -> list[dict[str, Any]]:
-        """Top 5 des champs les plus souvent manquants."""
+    def get_missing_fields_stats(entreprise_id: int | None = None) -> list[dict[str, Any]]:
+        """Top 5 des champs les plus souvent manquants (filtré par client)."""
         conn = db.server_conn
         if not conn:
             return []
@@ -174,6 +215,8 @@ class BladoHRMixin:
                 ("Nationalité", "nationality"),
                 ("Situation familiale", "marital_status"),
             ]
+            ent_where = f" AND {ENT_FILTER_SQL}" if entreprise_id else ""
+            ent_params = (entreprise_id, entreprise_id) if entreprise_id else ()
             result = []
             for label, col in fields:
                 # DATE columns can't be compared to ''
@@ -182,10 +225,12 @@ class BladoHRMixin:
                 else:
                     cond = f"({col} IS NULL OR {col} = '')"
                 cur.execute(f"""
-                    SELECT COUNT(*) FROM blado_employee
-                    WHERE emp_status = 'actif' AND departure_date IS NULL
+                    SELECT COUNT(*) FROM blado_employee a
+                    LEFT JOIN services s ON s.id = a.fk_service_id
+                    WHERE a.emp_status = 'actif' AND a.departure_date IS NULL
                       AND {cond}
-                """)
+                    {ent_where}
+                """, ent_params)
                 missing = cur.fetchone()[0] or 0
                 result.append({"label": label, "missing": missing})
             result.sort(key=lambda x: x["missing"], reverse=True)
@@ -196,19 +241,25 @@ class BladoHRMixin:
             return []
 
     @staticmethod
-    def get_missing_docs_stats() -> list[dict[str, Any]]:
-        """Employés actifs sans document dans les catégories obligatoires."""
+    def get_missing_docs_stats(entreprise_id: int | None = None) -> list[dict[str, Any]]:
+        """Employés actifs sans document (filtré par client)."""
         conn = db.server_conn
         if not conn:
             return []
         cur = conn.cursor()
         try:
             # Compte les employés sans aucun document
-            cur.execute("""
+            query = """
                 SELECT COUNT(*) FROM blado_employee a
+                LEFT JOIN services s ON s.id = a.fk_service_id
                 WHERE a.emp_status = 'actif' AND a.is_active = TRUE
                 AND NOT EXISTS (SELECT 1 FROM blado_document d WHERE d.staff_id = a.id)
-            """)
+            """
+            params: list[Any] = []
+            if entreprise_id:
+                query += f" AND {ENT_FILTER_SQL}"
+                params = [entreprise_id, entreprise_id]
+            cur.execute(query, params)
             missing = cur.fetchone()[0] or 0
             result = [{"label": "Sans documents", "missing": missing}]
             result.sort(key=lambda x: x["missing"], reverse=True)
@@ -319,11 +370,17 @@ class BladoHRMixin:
             return None
 
     @staticmethod
-    def get_missions_kpis() -> dict:
+    def get_missions_kpis(entreprise_id: int | None = None) -> dict:
         conn = db.server_conn
         if not conn: return {}
         cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FILTER (WHERE statut='active'), COUNT(*), COALESCE(SUM(montant),0) FROM missions")
+        query = ("SELECT COUNT(*) FILTER (WHERE statut='active'), COUNT(*), "
+                 "COALESCE(SUM(montant),0) FROM missions")
+        params: list[Any] = []
+        if entreprise_id:
+            query += " WHERE entreprise_id=%s"
+            params.append(entreprise_id)
+        cur.execute(query, params)
         r = cur.fetchone()
         return {"actives": r[0] or 0, "total": r[1] or 0, "montant_total": float(r[2] or 0)}
 
@@ -342,6 +399,73 @@ class BladoHRMixin:
         cur = conn.cursor()
         cur.execute("SELECT id, nom, telephone, email, ville, est_active FROM entreprises ORDER BY nom")
         return [{"id": r[0], "nom": r[1], "telephone": r[2], "email": r[3], "ville": r[4], "est_active": r[5]} for r in cur.fetchall()]
+
+    # ========================================================================
+    # Consultants & entreprises — CRUD complet (page Paramètres)
+    # ========================================================================
+
+    _CONSULTANT_FIELDS = [
+        "nom", "sigle", "forme_juridique", "matricule_fiscal",
+        "telephone", "whatsapp", "email", "site_web",
+        "adresse", "code_postal", "ville", "pays",
+        "signature_nom", "signature_titre", "logo_path",
+        "est_actif", "notes",
+    ]
+
+    _ENTREPRISE_FIELDS = [
+        "nom", "sigle", "forme_juridique", "registre_commerce", "id_fiscal",
+        "telephone", "whatsapp", "email", "site_web",
+        "facebook", "linkedin", "twitter",
+        "adresse", "code_postal", "ville", "pays",
+        "logo_path", "est_active", "is_self", "notes", "color",
+    ]
+
+    @staticmethod
+    def _save_row(table: str, fields: list[str], data: dict) -> int | None:
+        conn = db.server_conn
+        if not conn: return None
+        try:
+            cur = conn.cursor()
+            vals = [data.get(f, "") for f in fields]
+            if data.get("id"):
+                sets = ", ".join(f"{f}=%s" for f in fields) + ", updated_at=NOW()"
+                cur.execute(f"UPDATE {table} SET {sets} WHERE id=%s",
+                            vals + [data["id"]])
+                return data["id"]
+            ph = ", ".join(["%s"] * len(fields))
+            cur.execute(f"INSERT INTO {table} ({', '.join(fields)}) VALUES ({ph}) RETURNING id", vals)
+            return cur.fetchone()[0]
+        except Exception:
+            import traceback; traceback.print_exc()
+            return None
+
+    @staticmethod
+    def get_consultants_full() -> list[dict]:
+        """Tous les consultants (actifs et inactifs) — gestion page Paramètres."""
+        conn = db.server_conn
+        if not conn: return []
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM consultants ORDER BY nom")
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+    @staticmethod
+    def save_consultant(data: dict) -> int | None:
+        return BladoHRMixin._save_row("consultants", BladoHRMixin._CONSULTANT_FIELDS, data)
+
+    @staticmethod
+    def get_entreprises_full() -> list[dict]:
+        """Toutes les entreprises clientes (actives et inactives)."""
+        conn = db.server_conn
+        if not conn: return []
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM entreprises ORDER BY is_self DESC, nom")
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+    @staticmethod
+    def save_entreprise(data: dict) -> int | None:
+        return BladoHRMixin._save_row("entreprises", BladoHRMixin._ENTREPRISE_FIELDS, data)
 
     @staticmethod
     def get_first_disabled_service() -> dict | None:
@@ -420,13 +544,15 @@ class BladoHRMixin:
     @staticmethod
     def _row_to_staff_compact(row: tuple, is_staff: bool) -> dict[str, Any]:
         # BLADO: 0=id,1=first,2=last,3=email,4=emp_status,
-        # 5=fk_service_id,6=pro_cat,7=matricule,8=service_label,9=service_color
+        # 5=fk_service_id,6=pro_cat,7=matricule,8=service_label,9=service_color,
+        # 10=entreprise_nom
         return {
             "id": row[0], "first_name": row[1], "last_name": row[2],
             "email": row[3], "full_name": f"{row[2]} {row[1]}",
             "emp_status": row[4], "fk_service_id": row[5],
             "professional_category": row[6], "matricule": row[7],
             "service_label": row[8], "service_color": row[9],
+            "entreprise_nom": row[10],
         }
 
     # ------------------------------------------------------------------
@@ -481,11 +607,8 @@ class BladoHRMixin:
             return False, "Base de donnees non disponible"
         cur = conn.cursor()
 
-        # Verifier si des documents utilisent cette categorie
-        cur.execute("SELECT COUNT(*) FROM blado_document WHERE category_key = %s", (category_key,))
-        doc_count = cur.fetchone()[0]
-        if doc_count > 0:
-            return False, f"Impossible de supprimer : {doc_count} document(s) associe(s) a cette categorie."
+        # NB : blado_document n'a plus de colonne category_key (documents par
+        # label, non catégorisés) — la vérification d'usage a été retirée.
 
         cur.execute(
             "UPDATE blado_detail_category SET enabled = false WHERE category_key = %s",
@@ -540,15 +663,6 @@ class BladoHRMixin:
             return True
         except Exception:
             return False
-        conn = db.server_conn
-        if not conn:
-            return False
-        cur = conn.cursor()
-        cur.execute("""
-            DELETE FROM blado_document
-            WHERE staff_id = %s AND category_key = %s AND file_name = %s
-        """, (staff_id, category_key, file_name))
-        return True
 
     # ------------------------------------------------------------------
     # Letters — Modèles et courriers générés
@@ -678,8 +792,15 @@ class BladoHRMixin:
             return None
         cur = conn.cursor()
         try:
+            # created_by référence blado_employee — l'utilisateur connecté
+            # (blado_user) n'y correspond pas forcément → NULL sinon FK violée
+            generated_by = generated_by or None
+            if generated_by:
+                cur.execute("SELECT 1 FROM blado_employee WHERE id = %s", (generated_by,))
+                if not cur.fetchone():
+                    generated_by = None
             cur.execute("""
-                INSERT INTO blado_generated_letter (staff_id, template_id, file_path, reference, generated_by)
+                INSERT INTO blado_generated_letter (staff_id, template_id, file_path, reference, created_by)
                 VALUES (%s, %s, %s, %s, %s)
                 RETURNING id
             """, (staff_id, template_id, file_path, reference, generated_by))

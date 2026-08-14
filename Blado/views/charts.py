@@ -58,7 +58,7 @@ class HBarCell(QWidget):
 
         ratio = self._value / self._total
         pct = int(round(ratio * 100))
-        bar_h = 8
+        bar_h = ds.space_m3   # 16 px — barre épaisse (pas un trait fin)
         bar_y = (h - bar_h) // 2
         label_w = max(80, w // 4)
         bar_start = label_w + ds.space_xs
@@ -72,13 +72,13 @@ class HBarCell(QWidget):
         p.drawText(QRectF(0, 0, label_w, h), Qt.AlignVCenter | Qt.AlignLeft,
                    self._label)
 
-        # Barre fond
+        # Barre fond — angles droits (une pilule arrondie ressemble à un bouton)
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(palette.outline_variant))
         bg_rect = QRectF(bar_start, bar_y, bar_max_w, bar_h)
-        p.drawRoundedRect(bg_rect, bar_h // 2, bar_h // 2)
+        p.drawRect(bg_rect)
 
-        # Barre valeur
+        # Barre valeur — angles droits également
         if ratio > 0:
             bar_color = QColor(self._color)
             if not bar_color.isValid():
@@ -86,7 +86,7 @@ class HBarCell(QWidget):
             p.setBrush(bar_color)
             fill_w = max(bar_h, int(bar_max_w * ratio))
             fill_rect = QRectF(bar_start, bar_y, fill_w, bar_h)
-            p.drawRoundedRect(fill_rect, bar_h // 2, bar_h // 2)
+            p.drawRect(fill_rect)
 
         # Valeur
         p.setPen(QColor(palette.text_soft))

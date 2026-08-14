@@ -11,6 +11,7 @@ from typing import Callable
 from PySide6.QtCore import Qt, QDate
 from PySide6.QtWidgets import (
     QDialog, QHBoxLayout, QInputDialog, QVBoxLayout, QWidget,
+    QMessageBox,
 )
 
 from bladocommon.design_system import ds
@@ -254,29 +255,29 @@ class TodoKanban(QWidget):
                 btn_row.setSpacing(ds.space_xxs)
                 if key == "todo":
                     take = M3Button("Prendre", variant=ButtonVariant.TONAL)
-                    take.setFixedHeight(28)
+                    take.setFixedHeight(ds.icon_btn_size)
                     take.clicked.connect(
                         lambda ch, tid=task["id"]: self._move_task(tid, "doing"))
                     btn_row.addWidget(take)
                 elif key == "doing":
                     done = M3Button("Terminer", variant=ButtonVariant.FILLED)
-                    done.setFixedHeight(28)
+                    done.setFixedHeight(ds.icon_btn_size)
                     done.clicked.connect(
                         lambda ch, tid=task["id"]: self._move_task(tid, "done"))
                     btn_row.addWidget(done)
                     back = M3Button("← Retour", variant=ButtonVariant.OUTLINED)
-                    back.setFixedHeight(28)
+                    back.setFixedHeight(ds.icon_btn_size)
                     back.clicked.connect(
                         lambda ch, tid=task["id"]: self._move_task(tid, "todo"))
                     btn_row.addWidget(back)
                 elif key == "done":
                     reopen = M3Button("Rouvrir", variant=ButtonVariant.OUTLINED)
-                    reopen.setFixedHeight(28)
+                    reopen.setFixedHeight(ds.icon_btn_size)
                     reopen.clicked.connect(
                         lambda ch, t=task: self._reopen_task(t))
                     btn_row.addWidget(reopen)
                     del_btn = M3Button("Suppr.", variant=ButtonVariant.TEXT)
-                    del_btn.setFixedHeight(28)
+                    del_btn.setFixedHeight(ds.icon_btn_size)
                     del_btn.setCursor(Qt.PointingHandCursor)
                     del_btn.clicked.connect(
                         lambda ch, tid=task["id"]: self._delete_task(tid))
@@ -308,7 +309,7 @@ class TodoKanban(QWidget):
 
         desc = M3TextEdit()
         desc.setPlaceholderText("Description de la tâche...")
-        desc.setFixedHeight(80)
+        desc.setFixedHeight(ds.field_height * 2 + ds.space_xs)
         desc.setStyleSheet(ds.flat_input_qss())
         layout.addWidget(desc)
 
@@ -333,6 +334,7 @@ class TodoKanban(QWidget):
         due = due_inp.date().toString("yyyy-MM-dd") if due_inp.date().isValid() else None
         if self._create_fn(text, task_type, due, None):
             self.reload()
+            QMessageBox.information(self, "Blado", "Tâche créée.")
 
     @safe_slot("TodoKanban._move_task")
     def _move_task(self, task_id: int, new_status: str):

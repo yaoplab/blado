@@ -10,7 +10,7 @@ from datetime import datetime
 from PySide6.QtCore import Qt, QSize, QTimer, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QMessageBox, QApplication,
+    QFrame, QHBoxLayout, QMessageBox, QApplication, QComboBox,
 )
 
 from phibuilder.widgets import M3Button, M3Label, M3Menu, M3ProfileButton
@@ -33,6 +33,8 @@ class TopBar(QFrame):
 
     theme_changed = Signal(str)
     logout_requested = Signal()
+    # BLADO multi-clients : sélecteur d'entreprise cliente (id, 0 = toutes)
+    entreprise_changed = Signal(int)
 
     _THEME_ICONS = {
         "blue": "light_mode",
@@ -43,6 +45,7 @@ class TopBar(QFrame):
 
     def __init__(self, show_network: bool = True, show_theme: bool = True,
                  show_profile: bool = True, show_datetime: bool = True,
+                 show_entreprise: bool = False,
                  parent=None):
         super().__init__(parent)
         self.setObjectName("top_bar")
@@ -50,6 +53,7 @@ class TopBar(QFrame):
         self._show_theme = show_theme
         self._show_profile = show_profile
         self._show_datetime = show_datetime
+        self._show_entreprise = show_entreprise
         self._build_ui()
         if show_datetime:
             self._start_clock()
@@ -77,6 +81,16 @@ class TopBar(QFrame):
 
         layout.addStretch()
 
+        # Entreprise cliente (BLADO mode consultant) — pilotée par MainWindow
+        if self._show_entreprise:
+            self._ent_combo = QComboBox()
+            self._ent_combo.setFixedHeight(ds.field_height)
+            self._ent_combo.setStyleSheet(ds.flat_input_qss())
+            self._ent_combo.setMinimumWidth(ds.space_xxxl)
+            self._ent_combo.addItem("Toutes les entreprises", 0)
+            self._ent_combo.currentIndexChanged.connect(self._on_entreprise_changed)
+            layout.addWidget(self._ent_combo)
+
         # Réseau
         if self._show_network:
             self._network_label = M3Label()
@@ -87,7 +101,7 @@ class TopBar(QFrame):
         if self._show_theme:
             self._theme_btn = M3Button()
             self._theme_btn.setObjectName("theme_btn")
-            self._theme_btn.setFixedSize(34, 34)
+            self._theme_btn.setFixedSize(theme_manager.image.theme_btn, theme_manager.image.theme_btn)
             self._theme_btn.setToolTip(_("topbar.theme_tooltip"))
             self._theme_btn.setIcon(self._make_theme_icon())
             self._theme_btn.setIconSize(QSize(18, 18))
@@ -106,7 +120,7 @@ class TopBar(QFrame):
         if self._show_profile:
             initials = self._compute_initials()
             self._profile_btn = M3ProfileButton(initials)
-            self._profile_btn.setFixedSize(34, 34)
+            self._profile_btn.setFixedSize(theme_manager.image.theme_btn, theme_manager.image.theme_btn)
             self._profile_btn.setCursor(Qt.PointingHandCursor)
             self._profile_btn.setStyleSheet(
                 f"QPushButton {{ background: {p.primary}; color: {p.on_primary}; "
@@ -190,6 +204,37 @@ class TopBar(QFrame):
         if key:
             self.theme_changed.emit(key)
 
+    # ── Entreprise cliente (BLADO) ─────────────────────────────────────
+
+    def set_entreprises(self, items: list) -> None:
+        """Peuple le sélecteur : liste de (nom, id). Appelé par MainWindow."""
+        if not hasattr(self, "_ent_combo"):
+            return
+        self._ent_combo.blockSignals(True)
+        self._ent_combo.clear()
+        self._ent_combo.addItem("Toutes les entreprises", 0)
+        for name, eid in items:
+            self._ent_combo.addItem(name, eid)
+        self._ent_combo.blockSignals(False)
+
+    def select_entreprise(self, eid: int) -> None:
+        """Sélectionne sans émettre entreprise_changed (état initial)."""
+        if not hasattr(self, "_ent_combo"):
+            return
+        idx = self._ent_combo.findData(eid)
+        if idx >= 0:
+            self._ent_combo.blockSignals(True)
+            self._ent_combo.setCurrentIndex(idx)
+            self._ent_combo.blockSignals(False)
+
+    def set_entreprise_visible(self, visible: bool) -> None:
+        if hasattr(self, "_ent_combo"):
+            self._ent_combo.setVisible(visible)
+
+    @safe_slot("TopBar._on_entreprise_changed")
+    def _on_entreprise_changed(self, idx: int):
+        self.entreprise_changed.emit(self._ent_combo.currentData() or 0)
+
     # ── Profil ────────────────────────────────────────────────────────
 
     def _compute_initials(self) -> str:
@@ -224,6 +269,8 @@ class TopBar(QFrame):
         p = theme_manager.palette
         s = theme_manager.font_size
         self.setStyleSheet(self._style)
+        if hasattr(self, "_ent_combo"):
+            self._ent_combo.setStyleSheet(ds.flat_input_qss())
         if hasattr(self, "_theme_btn"):
             self._theme_btn.setIcon(self._make_theme_icon())
         if hasattr(self, "_profile_btn"):

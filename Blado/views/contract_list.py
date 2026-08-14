@@ -4,6 +4,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
+    QMessageBox,
 )
 
 from bladocommon.design_system import ds
@@ -128,6 +129,7 @@ class ContractList(QWidget):
         dlg = ContractFormDialog(self._staff.get("id", 0), parent=self)
         if dlg.exec():
             self.refresh()
+            QMessageBox.information(self, "Blado", "Contrat enregistré.")
 
     @safe_slot("ContractList._on_edit")
     def _on_edit(self, idx: int):
@@ -135,6 +137,7 @@ class ContractList(QWidget):
             dlg = ContractFormDialog(self._staff.get("id", 0), self._contracts[idx], parent=self)
             if dlg.exec():
                 self.refresh()
+                QMessageBox.information(self, "Blado", "Contrat modifié.")
 
     @safe_slot("ContractList._on_terminate")
     def _on_terminate(self, idx: int):

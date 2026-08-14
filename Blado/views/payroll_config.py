@@ -107,7 +107,7 @@ class PayrollConfigPage(QWidget):
             val = str(self._cfg.get(key, float(default.replace(" ", ""))))
             field = M3TextField()
             field.setText(val)
-            field.setFixedWidth(120)
+            field.setFixedWidth(ds.button_height * 2 + ds.space_m3)
             field.setFixedHeight(ds.field_height)
             field.setStyleSheet(ds.flat_input_qss())
             row.addWidget(field)

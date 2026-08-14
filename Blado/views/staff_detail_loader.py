@@ -2,7 +2,7 @@
 # BLADO: fichier ≤ 1000 lignes (règle pyside6-wrapper)
 
 from __future__ import annotations
-from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QVBoxLayout, QLabel
+from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QVBoxLayout, QLabel, QMessageBox
 from bladocommon.database import db
 from bladocommon.design_system import ds
 from bladocommon.safe_slot import safe_slot
@@ -158,6 +158,7 @@ class StaffDetailLoaderMixin:
         dlg = ContractFormDialog(self._staff.get("id", 0), parent=self)
         if dlg.exec() and hasattr(self, "_contract_widget"):
             self._contract_widget.refresh()
+            QMessageBox.information(self, "Blado", "Contrat enregistré.")
 
     # ── Page 5 : Congés ──
 
@@ -182,6 +183,7 @@ class StaffDetailLoaderMixin:
                 self._leave_balance.refresh()
             if hasattr(self, "_leave_history"):
                 self._leave_history.refresh()
+            QMessageBox.information(self, "Blado", "Demande de congé enregistrée.")
 
     # ── Page 6 : Documents ──
 

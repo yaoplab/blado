@@ -16,6 +16,7 @@ from bladocommon.database import db
 from bladocommon.design_system import ds
 from bladocommon.theme import theme_manager
 from bladocommon.safe_slot import safe_slot
+from bladocommon.session import session
 
 _JOURS_COURTS = ["Lun", "Mar", "Mer", "Jeu", "Ven"]
 
@@ -35,7 +36,13 @@ def _load_service_colors():
     if not conn:
         return
     cur = conn.cursor()
-    cur.execute("SELECT id, color FROM services WHERE color IS NOT NULL")
+    # BLADO multi-clients : seules les couleurs des services du client actif
+    conditions = ["color IS NOT NULL"]
+    params = []
+    if session.mode == "consultant" and session.entreprise_id:
+        conditions.append("entreprise_id = %s")
+        params.append(session.entreprise_id)
+    cur.execute(f"SELECT id, color FROM services WHERE {' AND '.join(conditions)}", params)
     for row in cur.fetchall():
         _service_colorS[row[0]] = row[1]
 
@@ -206,7 +213,17 @@ class AbsencePlanner(QWidget):
         if not conn:
             return {}
         cur = conn.cursor()
-        cur.execute("""
+        # BLADO : plage glissante de 12 mois (au lieu d'une plage en dur) et
+        # filtre client — les événements du client actif uniquement
+        start = date.today()
+        end = start + timedelta(days=365)
+        ent_where = ""
+        params = [start, end, like]
+        if session.mode == "consultant" and session.entreprise_id:
+            ent_where = (" AND (a.fk_entreprise_id = %s OR "
+                         "(a.fk_entreprise_id IS NULL AND c.entreprise_id = %s))")
+            params.extend([session.entreprise_id, session.entreprise_id])
+        cur.execute(f"""
             SELECT e.staff_id, e.event_type,
                    COALESCE(e.event_at, e.created_at)::date AS event_date,
                    a.first_name, a.last_name, e.note,
@@ -214,10 +231,11 @@ class AbsencePlanner(QWidget):
             FROM blado_event e
             JOIN blado_employee a ON a.id = e.staff_id
             LEFT JOIN services c ON c.id = a.fk_service_id
-            WHERE COALESCE(e.event_at, e.created_at) BETWEEN '2026-08-01' AND '2027-08-01'
+            WHERE COALESCE(e.event_at, e.created_at) BETWEEN %s AND %s
               AND e.event_type LIKE %s
+              {ent_where}
             ORDER BY e.event_at
-        """, (like,))
+        """, params)
         by_date: dict[str, list[dict]] = {}
         for r in cur.fetchall():
             ed = str(r[2])[:10] if r[2] else ""
@@ -340,12 +358,12 @@ class AbsencePlanner(QWidget):
                     if ccode:
                         lines.append(
                             f'<span style="color:{color};font-weight:bold;'
-                            f'font-size:11px;">{ccode}</span>'
-                            f'<span style="color:{p.text_strong};font-size:11px;">'
+                            f'font-size:12px;">{ccode}</span>'
+                            f'<span style="color:{p.text_strong};font-size:12px;">'
                             f'  {nom}</span>')
                     else:
                         lines.append(
-                            f'<span style="color:{p.text_strong};font-size:11px;">'
+                            f'<span style="color:{p.text_strong};font-size:12px;">'
                             f'{nom}</span>')
                     if note:
                         lines.append(

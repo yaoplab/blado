@@ -52,7 +52,7 @@ class DocumentDialog(QDialog):
         # Description
         self._desc_field = QTextEdit()
         self._desc_field.setPlainText(self._doc.get("description", "") if self._doc else "")
-        self._desc_field.setFixedHeight(80)
+        self._desc_field.setFixedHeight(ds.field_height * 2 + ds.space_xs)
         self._desc_field.setStyleSheet(ds.flat_input_qss())
         form.addRow("Description :", self._desc_field)
 
@@ -188,16 +188,16 @@ class DocumentManager(QWidget):
                 sz = doc["file_size"]
                 s_str = f"{sz:,} o" if sz < 1024 else f"{sz/1024:.1f} Ko"
                 sz_lbl = QLabel(s_str)
-                sz_lbl.setStyleSheet(f"font-size:{s(11)}px;color:{p.text_soft};border:none;")
+                sz_lbl.setStyleSheet(f"font-size:{s(12)}px;color:{p.text_soft};border:none;")
                 r1.addWidget(sz_lbl)
             edit_btn = QPushButton("✏️")
-            edit_btn.setFixedSize(28, 28)
+            edit_btn.setFixedSize(ds.icon_btn_size, ds.icon_btn_size)
             edit_btn.setCursor(Qt.PointingHandCursor)
             edit_btn.setStyleSheet("QPushButton{border:none;background:transparent;}")
             edit_btn.clicked.connect(lambda checked, d=doc: self._on_edit(d))
             r1.addWidget(edit_btn)
             del_btn = QPushButton("🗑️")
-            del_btn.setFixedSize(28, 28)
+            del_btn.setFixedSize(ds.icon_btn_size, ds.icon_btn_size)
             del_btn.setCursor(Qt.PointingHandCursor)
             del_btn.setStyleSheet("QPushButton{border:none;background:transparent;}")
             del_btn.clicked.connect(lambda checked, d=doc: self._on_delete(d))
@@ -208,7 +208,7 @@ class DocumentManager(QWidget):
             if doc.get("description"):
                 desc = QLabel(doc["description"])
                 desc.setWordWrap(True)
-                desc.setStyleSheet(f"font-size:{s(11)}px;color:{p.text_soft};border:none;")
+                desc.setStyleSheet(f"font-size:{s(12)}px;color:{p.text_soft};border:none;")
                 cl.addWidget(desc)
 
             # Row 3: Paths
@@ -228,12 +228,14 @@ class DocumentManager(QWidget):
         dlg = DocumentDialog(self._staff_id, parent=self)
         if dlg.exec():
             self.refresh()
+            QMessageBox.information(self, "Blado", "Document enregistré.")
 
     @safe_slot("DocumentManager._on_edit")
     def _on_edit(self, doc: dict):
         dlg = DocumentDialog(self._staff_id, doc, parent=self)
         if dlg.exec():
             self.refresh()
+            QMessageBox.information(self, "Blado", "Document modifié.")
 
     @safe_slot("DocumentManager._on_delete")
     def _on_delete(self, doc: dict):
